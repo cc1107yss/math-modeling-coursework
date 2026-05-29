@@ -1,0 +1,4 @@
+parameter,baseValue,baseMeanDominantFrac,sensitivityCoeff
+growScale,1,0.361411669260063,0.0860742969908738
+consumeScale,1,0.361411669260063,0.423689776959333
+lambdaReplace,1,0.361411669260063,-0.541799062468418

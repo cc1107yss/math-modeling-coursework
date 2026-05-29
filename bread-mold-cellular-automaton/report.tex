@@ -1,0 +1,730 @@
+
+%========================
+% 建议标题（可直接替换）
+%========================
+\documentclass[12pt,a4paper]{ctexart}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage[hidelinks]{hyperref}
+
+\title{基于多菌种竞争--促进型元胞自动机的面包霉菌时空演化建模}
+\author{陈晨 202311040048 \\
+崔天予 202311998244\\
+任明雪 202411998080\\}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+面包制品具有水分活度较高、营养基质丰富、储藏期间易受环境温湿条件影响等特征，因此在常温条件下极易发生霉菌污染与扩张。针对面包表面多菌种霉菌生长过程中存在的局部扩张、异种竞争、相互促进、资源消耗及边界替换等现象，本文建立了一个环境响应与空间演化相耦合的数学模型。首先，从面包霉变的实际现象出发，明确研究目标为：刻画不同霉菌在面包表面的时空分布演化，计算各菌种面积占比、优势菌种和稳定时刻，并提取不同菌种的边缘轮廓与交界边界。其次，在预测微生物学与元胞自动机建模思想的基础上，构造温度、水平活度和 pH 的综合环境适宜度函数，并建立多菌种竞争--促进型元胞自动机主模型。模型中同时引入局部资源场、菌龄变量和边界替换机制，从而使模型能够反映霉菌从少量初始污染点出发，经局部侵占、资源衰减和边界竞争后形成稳定空间图案的全过程。最后，给出模型的状态演化公式、算法流程以及重复仿真的统计量计算方法，为后续 MATLAB 编程实现、结果展示与灵敏度分析奠定基础。
+
+\textbf{关键词：} 面包霉变；元胞自动机；预测微生物学；多菌种竞争；时空演化
+\end{abstract}
+
+
+%========================
+% 正文开始
+%========================
+\maketitle
+\section{提出问题}
+
+面包是一类典型的高含水、高营养、易腐败食品。在实际储藏过程中，面包表面常常并非只出现单一菌种，而是会出现白色、绿色、黑色、黄色、橙色等不同外观特征的霉菌斑块，并呈现出明显的空间扩张、相互挤压、边界交错和局部替换等现象。随着储藏时间的延长，霉菌由少量初始污染点逐渐向周围扩散，并在有限基质表面形成复杂的彩色分区结构。
+
+本题拟研究如下问题：在给定储藏环境下，如何建立一个能够描述面包表面多菌种霉菌时空演化过程的数学模型，使其能够同时回答以下几个层面的问题：
+\begin{enumerate}
+    \item 不同菌种在面包表面的扩张过程如何随时间演变；
+    \item 各菌种面积占比如何变化，最终何种菌种占据优势；
+    \item 在资源有限、局部竞争与促进并存的条件下，系统何时达到稳定状态；
+    \item 如何从最终彩色分布图中提取不同菌种的边缘轮廓与交界边界。
+\end{enumerate}
+
+为此，本文以面包表面为二维离散区域，构造多菌种竞争--促进型元胞自动机模型，并耦合环境适宜度、局部资源、边界替换等机制，试图实现对霉菌生长图案的动态模拟与定量刻画。
+
+\section{问题分析}
+
+\subsection{研究目标分析}
+
+本题并不是单纯地求某一种霉菌的总生长量，也不是只研究单个时间截面的污染面积，而是要研究一个多菌种、强空间依赖、非线性、有限资源约束下的时空演化问题。因此，本题的核心目标可以分解为以下四项：
+\begin{enumerate}
+    \item 建立能够描述面包表面霉菌时空扩张的主模型；
+    \item 在模型中体现不同菌种之间的竞争、促进与边界替换机制；
+    \item 定义并计算面积占比、优势菌种、稳定时刻、边缘轮廓等指标；
+    \item 为后续程序实现、重复仿真、灵敏度分析和结果展示提供统一框架。
+\end{enumerate}
+
+\subsection{主要影响因素分析}
+
+结合食品霉菌生长机理与前期作业中已有观察，本题的主要影响因素可归纳为以下几类：
+
+\paragraph{（1）环境因素}
+温度 \(T\)、水平活度 \(a_w\) 和 pH 是影响霉菌生长最直接的环境变量。已有研究表明，面包及烘焙制品中的霉菌生长与 \(T\)、\(a_w\)、pH 密切相关，这些因素不仅影响径向生长速率，也影响迟滞期及可见霉斑出现时间。因此，本文将三者统一写入环境适宜度函数中，用以表征当前储藏环境对不同菌种扩张能力的调节作用。
+
+\paragraph{（2）菌种自身差异}
+不同霉菌在扩张速度、边界侵占能力、资源消耗速度和环境适应性上均存在差异。若不区分菌种差异，就无法解释为何某些颜色斑块扩张更快、某些菌种更容易在后期占据优势。因此，模型中需为不同菌种分别设置基础生长率、基础防守能力以及环境响应参数。
+
+\paragraph{（3）局部邻域结构}
+霉菌的扩张具有明显的局部性。某一位置是否会被某类菌种侵占，不仅取决于该位置是否适宜生长，也取决于其邻域内是否已有同类据点、异类是否形成压制，以及该位置是否处于边缘地带。因此，邻域统计量是元胞自动机规则中的核心输入。
+
+\paragraph{（4）基质与资源条件}
+面包表面虽然整体营养丰富，但局部资源并非无限。随着菌落扩张，局部区域的可利用营养与水分会不断下降，从而抑制后期继续扩张。若模型中不引入资源场，则系统往往会无限扩张，难以呈现现实中的渐进稳定现象。因此，有必要设置位置相关的资源变量，并建立资源更新方程。
+
+\paragraph{（5）初始污染状态}
+不同菌种的初始种子点数量、位置和分布方式，会显著影响后续图案形成。例如，若某一菌种在中心区域先形成多个据点，则其更有可能在后续竞争中占据空间优势。因此，模型中需明确初始化规则，并在后续采用多次重复仿真消除单次随机初始化带来的偶然性。
+
+\subsection{模型选择分析}
+
+从已有研究看，预测真菌学常通过二级模型来描述环境因素对霉菌生长速率和迟滞期的影响，这一类方法在食品腐败风险估计和货架期预测中较为成熟；但其描述对象通常是菌落直径、生长速率或概率边界等宏观量，难以直接给出多菌种在有限平面上的空间图案。另一方面，真菌群落的元胞自动机模型与微生物 CA 模型已被用于描述局部竞争、群落演替和图案形成过程，其优势在于可以把“局部规则”转化为“整体图案”。因此，本文采用环境适宜度子模型 + 多菌种竞争--促进型元胞自动机主模型的组合建模思路：一方面保留环境变量的生物学意义，另一方面突出多菌种空间竞争和边缘演化的图案特征。
+
+\section{假设与符号说明}
+
+\subsection{模型假设}
+
+为使问题具有可计算性，同时尽可能保持对实际霉变过程的解释力，作如下假设：
+
+\begin{enumerate}
+    \item \textbf{二维表面假设：} 仅考虑面包表面的霉菌扩张，不考虑厚度方向的三维深入生长，将面包表面抽象为二维离散区域。
+    \item \textbf{环境恒定假设：} 在一次模拟过程中，储藏环境中的温度 \(T\)、水平活度 \(a_w\)、pH 近似保持不变。
+    \item \textbf{功能型菌群假设：} 本文不对霉菌进行严格生物分类，而是根据可视外观将其划分为五类功能型菌群，分别对应五种颜色类别。
+    \item \textbf{单元胞主导占据假设：} 每个元胞在任一时刻只允许被一种主导状态占据，不设置多菌种混合占据态。
+    \item \textbf{局部扩张假设：} 霉菌主要依靠邻域扩张实现传播，远距离跳跃式污染在主模型中忽略。
+    \item \textbf{有限资源假设：} 面包表面局部资源有限，菌落扩张会消耗资源，资源耗散将抑制后续扩张。
+    \item \textbf{边界替换假设：} 当某类菌种对异类边界元胞具有足够大的侵占优势时，允许发生局部替换，从而体现不同菌种之间的边界争夺。
+    \item \textbf{同步更新假设：} 同一时刻所有元胞同时按照既定规则完成状态更新。
+\end{enumerate}
+
+\subsection{符号说明}
+
+\begin{table}[H]
+\centering
+\caption{主要符号说明}
+\begin{tabular}{p{2.6cm} p{9.2cm}}
+\toprule
+符号 & 含义 \\
+\midrule
+\(\Omega\) & 面包表面的离散区域 \\
+\(m\times n\) & 网格规模，本文取 \(100\times 100\) \\
+\(\Delta x,\Delta y\) & 空间步长，本文取 \(1\text{ mm}\times1\text{ mm}\) \\
+\(\Delta t\) & 时间步长，本文取 \(2\) h \\
+\(S_{ij}(t)\) & 时刻 \(t\) 元胞 \((i,j)\) 的状态 \\
+\(R_{ij}(t)\) & 元胞 \((i,j)\) 在时刻 \(t\) 的局部剩余资源 \\
+\(A_{ij}(t)\) & 元胞 \((i,j)\) 在时刻 \(t\) 的菌龄 \\
+\(B_{ij}\) & 元胞 \((i,j)\) 的静态基质适宜度 \\
+\(K={2,3,4,5,6}\) & 五类霉菌对应的状态编号集合 \\
+\(v_k\) & 第 \(k\) 类菌种的基础生长率 \\
+\(d_k\) & 第 \(k\) 类菌种的基础防守能力 \\
+\(E_k(T,a_w,pH)\) & 第 \(k\) 类菌种的环境适宜度函数 \\
+\(N_{ij}^{(k)}(t)\) & 邻域中第 \(k\) 类菌种的加权数量 \\
+\(P_{ij}^{(k)}(t)\) & 第 \(k\) 类菌种对元胞 \((i,j)\) 的侵占压力 \\
+\(D_{ij}^{(r)}(t)\) & 驻留菌种 \(r\) 在元胞 \((i,j)\) 的防守能力 \\
+\(\beta_{\ell k}\) & 菌种 \(\ell\) 对菌种 \(k\) 的相互作用系数 \\
+\(\rho_k(t)\) & 时刻 \(t\) 第 \(k\) 类菌种的面积占比 \\
+\(t^\ast\) & 系统达到稳定状态的时刻 \\
+\(\partial X_k(t)\) & 时刻 \(t\) 第 \(k\) 类菌种的边缘轮廓集合 \\
+\(\Gamma_{k\ell}(t)\) & 时刻 \(t\) 菌种 \(k\) 与菌种 \(\ell\) 的交界集合 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{状态编码}
+
+定义元胞状态变量
+\[
+S_{ij}(t)\in\{0,1,2,3,4,5,6\},
+\]
+其中：
+\[
+\begin{cases}
+0, & \text{面包外部背景};\\
+1, & \text{未污染面包};\\
+2,3,4,5,6, & \text{五类不同功能型霉菌}.
+\end{cases}
+\]
+
+\section{模型建立与计算}
+
+\subsection{时空离散与面包区域表示}
+
+将面包表面近似为一个边长为 \(100\text{ mm}\) 的正方形区域，并离散为 \(100\times 100\) 个元胞，则
+\[
+\Delta x=\Delta y=1\text{ mm}.
+\]
+每个元胞代表 \(1\text{ mm}\times 1\text{ mm}\) 的真实表面区域。取时间步长
+\[
+\Delta t=2\text{ h},
+\]
+即每进行一次 CA 更新，对应现实储藏时间推进 \(2\) 小时。
+
+定义面包区域为
+\[
+\Omega=\{(i,j)\mid 1\le i\le m,\ 1\le j\le n,\ M_{ij}=1\},
+\]
+其中 \(M_{ij}\) 为面包掩膜函数；当 \(M_{ij}=0\) 时表示该点不属于面包本体。
+
+\subsection{初始资源设置}
+
+考虑到面包边缘往往比中心更易失水，且不同位置微观组织并不完全一致，引入静态基质适宜度 \(B_{ij}\in[0,1]\) 表示位置 \((i,j)\) 对霉菌定植的天然友好程度。定义
+\[
+B_{ij}=\mathrm{clip}\bigl(1-\kappa d_{ij}^{\mathrm{edge}}+\xi_{ij},\,0,\,1\bigr),
+\]
+其中，\(d_{ij}^{\mathrm{edge}}\) 表示元胞 \((i,j)\) 到面包边界的归一化距离，\(\kappa>0\) 表示边缘干燥效应强度，\(\xi_{ij}\) 为小扰动项，用于避免图案过于规则。
+
+局部资源变量定义为
+\[
+R_{ij}(t)\in[0,1].
+\]
+初始化时令
+\[
+R_{ij}(0)=B_{ij},\qquad (i,j)\in\Omega,
+\]
+即初始资源分布与基质适宜度一致。
+
+\subsection{邻域结构与局部统计量}
+
+采用 Moore 八邻域。对元胞 \((i,j)\)，其邻域记为
+\[
+\mathcal{N}_{ij}=\{(u,v)\mid \max(|u-i|,|v-j|)=1\}.
+\]
+
+考虑到正交方向传播和对角方向传播对空间扩张的贡献并不完全相同，引入加权邻域统计量
+\[
+N_{ij}^{(k)}(t)=\sum_{(u,v)\in\mathcal{N}_{ij}} w_{uv}\,\mathbf{1}\{S_{uv}(t)=k\},
+\]
+其中
+\[
+w_{uv}=
+\begin{cases}
+1, & (u,v)\text{ 为上下左右邻居},\\
+\omega_d, & (u,v)\text{ 为对角邻居},
+\end{cases}
+\qquad 0<\omega_d<1.
+\]
+在后续程序中可取 \(\omega_d=0.7\)。
+
+\subsection{环境适宜度子模型}
+
+根据预测真菌学和食品霉菌建模文献，温度 \(T\)、水平活度 \(a_w\) 与 pH 是霉菌生长的主要外部影响因子。考虑到本次作业的重点是构造具有可解释性的时空模型，而非拟合具体菌株实验数据，故将环境响应统一抽象为无量纲环境适宜度函数：
+\[
+E_k(T,a_w,pH)=\phi_k^{(T)}(T)\cdot \phi_k^{(a_w)}(a_w)\cdot \phi_k^{(pH)}(pH),
+\]
+其中各单因子响应函数均取值于 \([0,1]\)。
+
+为便于后续参数设定和程序实现，本文采用钟形近似响应函数：
+\[
+\phi_k^{(T)}(T)=\exp\left[-\frac{(T-T_k^\ast)^2}{2\sigma_{T,k}^2}\right],
+\]
+\[
+\phi_k^{(a_w)}(a_w)=\exp\left[-\frac{(a_w-a_{w,k}^\ast)^2}{2\sigma_{a_w,k}^2}\right],
+\]
+\[
+\phi_k^{(pH)}(pH)=\exp\left[-\frac{(pH-pH_k^\ast)^2}{2\sigma_{pH,k}^2}\right].
+\]
+其中 \(T_k^\ast\)、\(a_{w,k}^\ast\)、\(pH_k^\ast\) 分别为第 \(k\) 类菌种的最适温度、最适水平活度和最适 pH；\(\sigma_{T,k}\)、\(\sigma_{a_w,k}\)、\(\sigma_{pH,k}\) 表示其容忍宽度。
+
+\subsection{空白元胞侵占规则}
+
+对任意未污染元胞 \((i,j)\)，即 \(S_{ij}(t)=1\)，定义第 \(k\) 类菌种对该位置的侵占压力为
+\begin{equation}
+P_{ij}^{(k)}(t)=
+\mathbf{1}\!\left(N_{ij}^{(k)}(t)>0\right)\,
+v_k\,
+E_k(T,a_w,pH)\,
+B_{ij}^{\theta_k}\,
+R_{ij}(t)^{\gamma_k}\,
+\bigl(N_{ij}^{(k)}(t)\bigr)^{\alpha_k}
+\exp\left(
+\sum_{\ell\in K,\ \ell\neq k}\beta_{\ell k}N_{ij}^{(\ell)}(t)
+\right),
+\label{eq:Pk}
+\end{equation}
+其中：
+\begin{itemize}
+    \item \(v_k\) 为第 \(k\) 类菌种的基础扩张能力；
+    \item \(\theta_k\) 为基质适宜度敏感系数；
+    \item \(\gamma_k\) 为资源依赖系数；
+    \item \(\alpha_k\) 为同类聚集促进指数；
+    \item \(\beta_{\ell k}\) 为异类 \(\ell\) 对 \(k\) 的相互作用系数，\(\beta_{\ell k}>0\) 表示促进，\(\beta_{\ell k}<0\) 表示抑制。
+\end{itemize}
+
+记总侵占压力为
+\[
+\Pi_{ij}(t)=\sum_{k\in K}P_{ij}^{(k)}(t).
+\]
+若 \(\Pi_{ij}(t)=0\)，则元胞保持未污染状态；若 \(\Pi_{ij}(t)>0\)，则定义
+\[
+\Pr\bigl(S_{ij}(t+1)=1\mid S_{ij}(t)=1\bigr)=e^{-\Pi_{ij}(t)},
+\]
+\[
+\Pr\bigl(S_{ij}(t+1)=k\mid S_{ij}(t)=1\bigr)
+=
+\left(1-e^{-\Pi_{ij}(t)}\right)\frac{P_{ij}^{(k)}(t)}{\Pi_{ij}(t)},\qquad k\in K.
+\]
+该规则刻画了“空白位置是否被污染”以及“若被污染，则由哪类菌种占据”的双重随机竞争机制。
+
+\subsection{已占据元胞的边界替换规则}
+
+若元胞 \((i,j)\) 在时刻 \(t\) 已被某菌种 \(r\in K\) 占据，即
+\[
+S_{ij}(t)=r,
+\]
+则其并非绝对稳定，而可能在边界竞争中被其他菌种替换。为此，定义驻留菌种 \(r\) 的局部防守能力为
+\begin{equation}
+D_{ij}^{(r)}(t)
+=
+d_r\,
+\bigl(1+\eta A_{ij}(t)\bigr)\,
+R_{ij}(t)^{\mu_r}\,
+\bigl(1+\chi N_{ij}^{(r)}(t)\bigr),
+\label{eq:defense}
+\end{equation}
+其中 \(d_r\) 为基础防守能力，\(\eta>0\) 表示菌龄增益系数，\(\mu_r\) 为资源对防守能力的影响指数，\(\chi>0\) 表示同类邻域支撑强度。
+
+对任意竞争菌种 \(k\neq r\)，定义其对驻留菌种的替换优势为
+\[
+M_{ij}^{(k\leftarrow r)}(t)=
+\max\left\{0,\ P_{ij}^{(k)}(t)-\lambda D_{ij}^{(r)}(t)\right\},
+\]
+其中 \(\lambda>0\) 为替换阈值系数。若对所有 \(k\neq r\) 均有
+\[
+M_{ij}^{(k\leftarrow r)}(t)=0,
+\]
+则该元胞在下一时刻继续保持菌种 \(r\)。若存在竞争者满足 \(M_{ij}^{(k\leftarrow r)}(t)>0\)，记
+\[
+\Sigma M_{ij}(t)=\sum_{k\in K,\ k\neq r}M_{ij}^{(k\leftarrow r)}(t),
+\]
+则定义
+\[
+\Pr\bigl(S_{ij}(t+1)=r\mid S_{ij}(t)=r\bigr)=e^{-\Sigma M_{ij}(t)},
+\]
+\[
+\Pr\bigl(S_{ij}(t+1)=k\mid S_{ij}(t)=r\bigr)
+=
+\left(1-e^{-\Sigma M_{ij}(t)}\right)
+\frac{M_{ij}^{(k\leftarrow r)}(t)}{\Sigma M_{ij}(t)},\qquad k\neq r.
+\]
+
+该规则体现：只有当竞争者的侵占优势超过驻留菌种的局部防守能力时，边界替换才可能发生。
+
+\subsection{资源更新方程}
+
+为体现有限资源约束，构造局部资源更新方程
+\begin{equation}
+R_{ij}(t+1)=
+\mathrm{clip}\left(
+R_{ij}(t)
++
+D_R\Delta_N R_{ij}(t)
+-
+c_1\mathbf{1}\{S_{ij}(t)=1\}
+-
+\sum_{k\in K}c_k\mathbf{1}\{S_{ij}(t)=k\},
+\,0,\,1
+\right),
+\label{eq:resource}
+\end{equation}
+其中：
+\begin{itemize}
+    \item \(D_R\) 为资源局部扩散系数；
+    \item \(\Delta_N\) 表示离散邻域拉普拉斯算子；
+    \item \(c_1\) 表示未污染面包在储藏中的自然衰减速率；
+    \item \(c_k\) 表示第 \(k\) 类菌种占据时对局部资源的消耗速率；
+    \item \(\mathrm{clip}(x,0,1)\) 表示把数值截断到区间 \([0,1]\) 内。
+\end{itemize}
+
+式 \eqref{eq:resource} 表明：资源既会受到邻域再分配影响，也会随着时间推移和菌落占据不断下降。这样可以避免系统在后期无限扩张，从而更符合“逐步趋于稳定”的实际现象。
+
+\subsection{菌龄更新规则}
+
+定义元胞菌龄变量 \(A_{ij}(t)\) 用以描述同一菌种对该位置的连续占据时长，其更新规则为
+\[
+A_{ij}(t+1)=
+\begin{cases}
+0, & S_{ij}(t+1)\in\{0,1\},\\
+1, & S_{ij}(t+1)\in K,\ S_{ij}(t+1)\neq S_{ij}(t),\\
+A_{ij}(t)+1, & S_{ij}(t+1)=S_{ij}(t)\in K.
+\end{cases}
+\]
+菌龄的引入使得“老菌落更稳固、边界新占据点更脆弱”的现象能够体现在公式中。
+
+\subsection{输出指标定义}
+
+\subsubsection{面积与面积占比}
+
+定义第 \(k\) 类菌种在时刻 \(t\) 的占据区域为
+\[
+X_k(t)=\{(i,j)\in\Omega:S_{ij}(t)=k\},
+\]
+则其面积为
+\[
+A_k(t)=|X_k(t)|,
+\]
+面积占比为
+\[
+\rho_k(t)=\frac{A_k(t)}{|\Omega|}.
+\]
+未污染面包面积占比为
+\[
+\rho_1(t)=\frac{|\{(i,j)\in\Omega:S_{ij}(t)=1\}|}{|\Omega|}.
+\]
+
+\subsubsection{稳定时刻与优势菌种}
+
+定义系统稳定时刻为
+\[
+t^\ast=
+\min\left\{
+t:
+\max_{s\in K\cup\{1\}}
+\left|\rho_s(t)-\rho_s(t-1)\right|<\varepsilon_1
+\right\},
+\]
+其中 \(\varepsilon_1>0\) 为面积占比稳定阈值。
+
+进一步定义最终优势菌种为
+\[
+k^\ast=\arg\max_{k\in K}\rho_k(t^\ast).
+\]
+
+\subsubsection{边缘轮廓与交界集合}
+
+定义第 \(k\) 类菌种的边缘轮廓集合为
+\[
+\partial X_k(t)=
+\left\{
+(i,j)\in\Omega:
+S_{ij}(t)=k,\ 
+\exists (u,v)\in\mathcal N_{ij}\ \text{使}\ S_{uv}(t)\neq k
+\right\}.
+\]
+其边缘长度记为
+\[
+L_k(t)=|\partial X_k(t)|.
+\]
+
+若需刻画菌种 \(k\) 与菌种 \(\ell\) 的交界，则定义
+\[
+\Gamma_{k\ell}(t)=
+\left\{
+(i,j)\in\Omega:
+S_{ij}(t)=k,\ 
+\exists (u,v)\in\mathcal N_{ij}\ \text{使}\ S_{uv}(t)=\ell
+\right\}.
+\]
+交界长度可记为
+\[
+I_{k\ell}(t)=|\Gamma_{k\ell}(t)|.
+\]
+
+\subsection{重复仿真与统计量计算}
+
+由于初始种子点具有随机性，为减小单次初始化带来的偶然影响，设进行 \(M\) 次重复仿真。若某个结果指标在第 \(r\) 次仿真中记为 \(Y^{(r)}\)，例如稳定时刻、最终面积占比或边缘长度，则其样本均值和方差分别为
+\[
+\bar{Y}=\frac{1}{M}\sum_{r=1}^{M}Y^{(r)},
+\]
+\[
+\mathrm{Var}(Y)=\frac{1}{M-1}\sum_{r=1}^{M}\left(Y^{(r)}-\bar{Y}\right)^2.
+\]
+后续程序实现中，可对 \(t^\ast\)、\(\rho_k(t^\ast)\)、\(L_k(t^\ast)\) 等关键指标进行多次统计，并在结果部分给出均值与方差表。
+
+%========================
+% 第6节：模型结果
+% 请插入到第5节后、参考文献前
+%========================
+
+\section{模型结果}
+
+\subsection{单次模拟结果分析}
+
+在基准参数设置下，对所建立的多菌种竞争--促进型元胞自动机模型进行单次仿真。仿真结果表明，系统在前期经历了由少量初始污染点向周围快速扩张的过程，随后随着局部资源持续消耗、菌种间边界竞争增强，面积占比变化逐渐减缓，并最终在第 135 步附近趋于稳定。整体上，模型成功呈现了多菌种从局部定植、邻域扩张到形成稳定空间分区的全过程。
+
+图 \ref{fig:single_curves} 给出了不同菌种及干净面包面积占比随时间变化的曲线。可以看出，干净面包占比在前 20 步左右迅速下降，随后逐渐逼近于 0；各菌种面积占比则在前期快速上升，后期逐步趋于平稳。这表明模型中的资源约束机制和局部竞争机制共同作用，使系统没有出现无限扩张，而是在后期进入相对稳定状态。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth]{bread_single_curves.png}
+    \caption{单次模拟中各菌种面积占比随时间的变化曲线}
+    \label{fig:single_curves}
+\end{figure}
+
+图 \ref{fig:single_final} 为单次模拟在稳定时刻附近的最终分布图。可以看出，不同菌种在面包表面形成了相对连续的颜色斑块，各菌种之间存在较明显的交界边界和接触区域，这说明模型能够较好地刻画局部邻域扩张、边界碰撞和替换竞争所带来的空间图案分化。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.60\textwidth]{bread_single_final.png}
+    \caption{单次模拟的最终稳定分布图（第 135 步）}
+    \label{fig:single_final}
+\end{figure}
+
+为进一步量化最终竞争结果，表 \ref{tab:single_summary} 给出了单次模拟下五类菌种的最终格子数、最终面积占比与最终边缘长度。结果表明，白色型霉菌在本次单次模拟中占据优势，其最终面积占比达到 0.3690；绿色型次之，为 0.2541；黄色型和黑色型处于中间水平；橙色型占比最小，仅为 0.0806。由此可见，在当前参数设置下，不同菌种在空间竞争中呈现出明显的强弱差异。
+
+\begin{table}[H]
+\centering
+\caption{单次模拟最终结果统计}
+\label{tab:single_summary}
+\begin{tabular}{ccccc}
+\toprule
+编号 & 霉菌类型 & 最终格子数 & 最终面积占比 & 最终边缘长度 \\
+\midrule
+1 & 白色型 & 1913 & 0.3690 & 424 \\
+2 & 绿色型 & 1317 & 0.2541 & 286 \\
+3 & 黑色型 & 701  & 0.1352 & 269 \\
+4 & 黄色型 & 830  & 0.1601 & 270 \\
+5 & 橙色型 & 418  & 0.0806 & 182 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+从表 \ref{tab:single_summary} 还可以看出，白色型霉菌虽然面积占比最高，但其边缘长度也最大，这说明其占据区域虽然广，却仍与其他菌种保持较长的接触边界；换言之，优势菌种并非“完全吞并”其他菌种，而是在更大范围内与其他菌种持续形成竞争边界。这与元胞自动机模型中“邻域扩张 + 边界竞争”的机理设定是一致的。
+
+\subsection{多次重复仿真结果分析}
+
+由于初始种子点的数量与位置具有随机性，单次仿真结果不可避免地带有一定偶然性。因此，本文在相同参数设置下进一步进行了 8 次重复仿真，并统计关键输出指标的均值、标准差和方差，以检验模型结论的稳健性。
+
+表 \ref{tab:repeat_overall} 给出了重复仿真下若干核心指标的总体统计结果。可以看出，系统稳定步数的均值为 135.75，标准差为 3.37，说明在不同随机初始化条件下，系统达到稳定的时刻波动并不大。最终优势菌种面积占比的均值为 0.3827，标准差为 0.0496，表明虽然不同随机种子会影响具体竞争格局，但优势菌种最终占据较大面积这一总体规律仍然较为稳定。与此同时，干净面包最终占比的均值仅为 0.0008，说明在当前环境和参数设置下，霉菌最终会对面包表面形成几乎完全覆盖。
+
+\begin{table}[H]
+\centering
+\caption{重复仿真总体统计结果（$n=8$）}
+\label{tab:repeat_overall}
+\begin{tabular}{cccc}
+\toprule
+指标 & 均值 & 标准差 & 方差 \\
+\midrule
+稳定步数 $t^\ast$ & 135.7500 & 3.3700 & 11.3571 \\
+最终优势菌种面积占比 & 0.3827 & 0.0496 & 0.0025 \\
+最终干净面包面积占比 & 0.0008 & 0.0003 & 0.0000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+表 \ref{tab:repeat_species} 进一步给出了五类菌种在重复仿真中的最终面积占比统计结果。结果显示，白色型霉菌的最终面积占比均值最高，为 0.3797，且标准差为 0.0551；绿色型次之，为 0.2828；黑色型、黄色型与橙色型的均值则均明显低于前两者。这说明在重复仿真意义下，白色型仍然是最有可能形成优势的菌种，但由于随机初始化与边界竞争的存在，不同菌种最终占比仍具有一定波动。
+
+\begin{table}[H]
+\centering
+\caption{重复仿真下各菌种最终面积占比统计结果}
+\label{tab:repeat_species}
+\begin{tabular}{cccc}
+\toprule
+霉菌类型 & 面积占比均值 & 标准差 & 方差 \\
+\midrule
+白色型 & 0.3797 & 0.0551 & 0.0030 \\
+绿色型 & 0.2828 & 0.0443 & 0.0020 \\
+黑色型 & 0.1076 & 0.0142 & 0.0002 \\
+黄色型 & 0.1121 & 0.0355 & 0.0013 \\
+橙色型 & 0.1170 & 0.0355 & 0.0013 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+综合单次仿真与重复仿真的结果可以发现：该模型不仅能够输出具有直观空间结构的最终分布图，而且在多次重复实验下仍能维持较为一致的总体竞争格局，即白色型和绿色型占据较大比例，其余菌种处于次优势或弱势地位。这说明模型在刻画多菌种空间竞争方面具有一定稳定性和可解释性。
+
+%========================
+% 第7节：模型检验
+%========================
+
+\section{模型检验}
+
+根据作业要求，本文采用灵敏度分析的方法对模型进行检验。考虑到单次仿真结果会受到随机初始化影响，本文在灵敏度分析中对每个参数水平均进行了 8 次重复仿真，并固定相同的一组随机种子，以尽可能剥离随机性对参数效应判断的干扰。灵敏度分析的输出指标取为“最终优势菌种面积占比”的重复仿真均值，记为 $Y(p)$。
+
+设参数基准值为 $p_0$，相对扰动幅度为 $\delta=0.1$，则参数 $p$ 的中心差分灵敏度系数定义为
+\[
+S_p=\frac{Y\!\left(p_0(1+\delta)\right)-Y\!\left(p_0(1-\delta)\right)}{2\delta\,Y(p_0)}.
+\]
+当 $|S_p|$ 越大时，说明模型输出对该参数越敏感；当 $S_p>0$ 时，表示参数增大将推动输出指标上升；当 $S_p<0$ 时，表示参数增大将压低输出指标。
+
+本文选取三个关键参数进行检验：
+\begin{enumerate}
+    \item 整体基础生长率缩放系数 \texttt{growScale}；
+    \item 整体资源消耗率缩放系数 \texttt{consumeScale}；
+    \item 边界替换阈值系数 \texttt{lambdaReplace}。
+\end{enumerate}
+
+图 \ref{fig:sensitivity} 给出了灵敏度分析结果，其中纵轴表示最终优势菌种面积占比的均值与标准差。可以看出，不同参数对模型输出的影响强弱并不相同：\texttt{growScale} 的曲线整体变化较小，说明模型对整体增长率的小幅扰动较为稳健；\texttt{consumeScale} 在取值增大时对应的最终优势菌种占比明显升高，说明资源竞争增强后，竞争格局更容易向强势菌种集中；\texttt{lambdaReplace} 则表现出明显负向效应，即替换阈值越高，最终优势菌种面积占比整体越低。
+
+\begin{figure}[H]
+    \centering
+    % 如果你的文件名被改成了 bread_sensitivity_plot_new.png，
+    % 请把下面这一行同步改掉
+    \includegraphics[width=0.82\textwidth]{bread_sensitivity_plot(1).png}
+    \caption{关键参数的灵敏度分析结果（均值 $\pm$ 标准差）}
+    \label{fig:sensitivity}
+\end{figure}
+
+表 \ref{tab:sensitivity_meanstd} 给出了三个关键参数在 0.9、1.0、1.1 三个取值水平下对应的最终优势菌种面积占比统计结果。结果显示，\texttt{growScale} 从 0.9 增大到 1.1 时，最终优势菌种面积占比均值仅由 0.3610 增加到 0.3672，变化幅度较小；\texttt{consumeScale} 从 0.9 增大到 1.1 时，均值由 0.3622 上升至 0.3928，表明资源消耗率增大后优势菌种更容易形成集中占据；\texttt{lambdaReplace} 从 0.9 增大到 1.1 时，均值由 0.3836 下降至 0.3445，且主导菌种模式由白色型转向绿色型，说明边界替换阈值不仅会影响优势程度，还可能改变最终的竞争胜者。
+
+\begin{table}[H]
+\centering
+\caption{灵敏度分析中不同参数水平下的最终优势菌种面积占比}
+\label{tab:sensitivity_meanstd}
+\begin{tabular}{ccccc}
+\toprule
+参数 & 0.9 & 1.0 & 1.1 & 主导类型变化 \\
+\midrule
+\texttt{growScale} 
+& $0.3610 \pm 0.0550$ 
+& $0.3614 \pm 0.0526$ 
+& $0.3672 \pm 0.0584$ 
+& 白 $\rightarrow$ 白 $\rightarrow$ 白 \\
+
+\texttt{consumeScale}
+& $0.3622 \pm 0.0427$ 
+& $0.3614 \pm 0.0526$ 
+& $0.3928 \pm 0.0553$ 
+& 白 $\rightarrow$ 白 $\rightarrow$ 白 \\
+
+\texttt{lambdaReplace}
+& $0.3836 \pm 0.0588$ 
+& $0.3614 \pm 0.0526$ 
+& $0.3445 \pm 0.0471$ 
+& 白 $\rightarrow$ 白 $\rightarrow$ 绿 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+表 \ref{tab:sensitivity_coeff} 给出了中心差分意义下的灵敏度系数。可以看出，三个参数的敏感性排序为
+\[
+|\texttt{lambdaReplace}| > |\texttt{consumeScale}| > |\texttt{growScale}|.
+\]
+其中，\texttt{lambdaReplace} 的灵敏度系数绝对值最大，达到 0.5418，说明边界替换机制是当前模型中影响最终竞争格局最显著的因素；\texttt{consumeScale} 的灵敏度系数为 0.4237，表明资源消耗率对优势菌种形成具有中等强度的正向影响；而 \texttt{growScale} 的灵敏度系数仅为 0.0861，说明整体生长率的小幅变化并不会显著改变最终竞争格局。
+
+\begin{table}[H]
+\centering
+\caption{关键参数的灵敏度系数}
+\label{tab:sensitivity_coeff}
+\begin{tabular}{ccc}
+\toprule
+参数 & 灵敏度系数 & 解释 \\
+\midrule
+\texttt{growScale} & 0.0861 & 弱正敏感 \\
+\texttt{consumeScale} & 0.4237 & 中等正敏感 \\
+\texttt{lambdaReplace} & $-0.5418$ & 强负敏感 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+从模型检验角度看，这一结果具有两层意义。其一，模型输出能够对关键参数变化作出方向明确、强弱有别的响应，说明模型具有可检验性，而非任意参数下都给出近乎相同的结果。其二，模型又没有表现出对所有参数都极度脆弱的特征，例如 \texttt{growScale} 的扰动只会带来较小幅度变化，这说明模型在一定范围内具备稳定性和鲁棒性。
+%========================
+% 第8节：结论
+%========================
+
+\section{结论}
+
+本文围绕面包表面多菌种霉菌的时空演化问题，构建了一个环境适宜度与空间竞争相耦合的多菌种竞争--促进型元胞自动机模型。模型在时空离散框架下，将环境因素、局部邻域结构、资源约束、边界替换以及菌龄效应统一纳入状态演化规则之中，从而能够描述霉菌从少量初始污染点出发，经邻域扩张和边界竞争后形成最终稳定空间分区的过程。
+
+数值实验结果表明：在基准参数下，系统会在前期经历快速扩张，后期因资源衰减和边界竞争而逐渐趋于稳定；最终白色型和绿色型霉菌占据较大面积，黑色型、黄色型和橙色型则处于相对次要地位。重复仿真结果进一步说明，该模型在随机初始化条件变化下仍能保持较稳定的总体竞争格局。灵敏度分析表明，边界替换阈值和资源消耗率对最终优势菌种面积占比影响较大，而整体基础生长率的影响相对较弱，这与模型的机理设定一致。
+
+总体而言，本文模型能够较好地实现以下目标：一是刻画多菌种霉菌的空间扩张和最终稳定分布；二是量化不同菌种面积占比、稳定步数和边缘竞争特征；三是通过重复仿真和灵敏度分析对模型进行初步检验。模型的不足在于：当前参数仍以合理设定和功能型抽象为主，尚未与具体菌株实验数据进行一一拟合；此外，稳定判据仍主要依赖面积占比变化，未来还可进一步将边缘长度变化与交界复杂度指标纳入更严格的稳定判定中。后续若能结合真实实验图像和面包储藏条件数据，对参数进行反演或校准，则模型的解释力与预测能力还可进一步提升。
+
+%========================
+% 附录（可选但建议加）
+%========================
+
+\appendix
+
+\section{AI 使用说明}
+
+本文在问题分析、模型表达、公式整理、文字润色以及 MATLAB 程序框架梳理过程中，适度使用了生成式人工智能工具进行辅助。AI 的主要作用包括：
+\begin{enumerate}
+    \item 协助将较为直观的建模想法整理为规范的数学表达与论文式表述；
+    \item 协助梳理元胞自动机状态变量、资源变量、菌龄变量及其相互关系；
+    \item 协助完善结果分析与灵敏度分析部分的文字表述，使输出结果能够更清晰地对应模型机理。
+\end{enumerate}
+需要说明的是，本文中的模型设定、参数运行、程序执行、结果图表以及最终结论，均由作者根据作业要求自行确认、运行与修订，AI 仅起辅助整理与表达作用。
+
+\section{源代码说明}
+
+本文的 MATLAB 源代码随支撑材料压缩包一并提交，主要包括以下文件：
+\begin{enumerate}
+    \item \texttt{bread\_ca\_report.m}：主程序，用于完成单次模拟、重复仿真及结果输出；
+    \item \texttt{bread\_sensitivity\_only.m}：灵敏度分析程序，用于对关键参数进行多次重复扰动实验；
+    \item 结果图与结果表文件：包括最终分布图、面积占比变化曲线、重复仿真结果表与灵敏度分析结果表等。
+\end{enumerate}
+%========================
+% 后续可在这里继续补写
+% \section{模型结果}
+% \section{模型检验}
+%========================
+\begin{thebibliography}{99}
+
+\bibitem{Shen2022}
+沈雨婷, 栗绍文, 孟宪荣.
+核心参数模型在食品微生物监控中的研究进展[J].
+食品工业科技, 2022, 43(9): 477--484.
+DOI: 10.13386/j.issn1002-0306.2021050213.
+
+\bibitem{Xu2016}
+徐文静, 韩小敏, 李凤琴, 张立实.
+预测微生物学在食品真菌污染及产毒中的应用[J].
+卫生研究, 2016, 45(3): 511--515.
+DOI: 10.19813/j.cnki.weishengyanjiu.2016.03.030.
+
+\bibitem{Yue2017}
+岳晓禹, 陈威风, 邹健, 李欣, 杨娜, 许文涛.
+温度对储藏玉米中霉菌生长影响的动力学模型构建[J].
+食品科学, 2017, 38(23): 231--236.
+DOI: 10.7506/spkx1002-6630-201723037.
+
+\bibitem{Bo2022}
+薄兴野, 谢瑞洁, 陈敏, 王艳东, 张如意, 刘振宇.
+三维元胞自动机模拟微生物生长研究[J].
+农业工程, 2022, 12(1): 25--29.
+
+\bibitem{Kong2001}
+孔日祥.
+界面微生物生长模型及应用的初步研究[D].
+天津: 天津科技大学, 2001.
+
+\bibitem{Dantigny2005}
+Dantigny P, Guilmart A, Bensoussan M.
+Basis of predictive mycology[J].
+International Journal of Food Microbiology, 2005, 100(1--3): 187--196.
+DOI: 10.1016/j.ijfoodmicro.2004.10.013.
+
+\bibitem{Marin2021}
+Mar{\'\i}n S, Freire L, Femenias A, Sant'Ana A S.
+Use of predictive modelling as tool for prevention of fungal spoilage at different points of the food chain[J].
+Current Opinion in Food Science, 2021, 41: 1--7.
+DOI: 10.1016/j.cofs.2021.02.006.
+
+\bibitem{Dagnas2014}
+Dagnas S, Onno B, Membr{\'e} J M.
+Modeling growth of three bakery product spoilage molds as a function of water activity, temperature and pH[J].
+International Journal of Food Microbiology, 2014, 186: 95--104.
+DOI: 10.1016/j.ijfoodmicro.2014.06.022.
+
+\bibitem{Sautour2002}
+Sautour M, Soares Mansur C, Divies C, Bensoussan M, Dantigny P.
+Comparison of the effects of temperature and water activity on growth rate of food spoilage moulds[J].
+Journal of Industrial Microbiology \& Biotechnology, 2002, 28(6): 311--315.
+DOI: 10.1038/sj.jim.7000248.
+
+\bibitem{Halley1994}
+Halley J M, Comins H N, Lawton J H, Hassell M P.
+Competition, succession and pattern in fungal communities: towards a cellular automaton model[J].
+Oikos, 1994, 70: 435--442.
+DOI: 10.2307/3545783.
+
+\bibitem{Halley1996}
+Halley J M, Robinson C H, Comins H N, Dighton J.
+Predicting straw decomposition by a four-species fungal community: a cellular automaton model[J].
+Journal of Applied Ecology, 1996, 33: 493--507.
+DOI: 10.2307/2404979.
+
+\bibitem{Alpers2021}
+Alpers T, Kerpes R, Frioli M, Nobis A, Hoi K I, Bach A, Jekle M, Becker T.
+Impact of Storing Condition on Staling and Microbial Spoilage Behavior of Bread and Their Contribution to Prevent Food Waste[J].
+Foods, 2021, 10(1): 76.
+DOI: 10.3390/foods10010076.
+
+\end{thebibliography}
+\end{document}
