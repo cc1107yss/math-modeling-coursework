@@ -1,0 +1,1018 @@
+
+\documentclass[UTF8,a4paper,12pt]{ctexart}
+\usepackage[top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs,longtable,array,multirow}
+\usepackage{graphicx,float,subcaption}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{threeparttable}
+\usepackage{pdflscape}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{setspace}
+\usepackage{tabularx}
+\usepackage{makecell}
+\usepackage{url}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    citecolor=black,
+    urlcolor=blue
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\cfoot{\thepage}
+
+\captionsetup{font=small,labelfont=bf}
+\setlength{\parindent}{2em}
+\linespread{1.25}
+
+\lstset{
+    language=Matlab,
+    basicstyle=\ttfamily\scriptsize,
+    keywordstyle=\color{blue!70!black},
+    commentstyle=\color{green!40!black},
+    stringstyle=\color{red!60!black},
+    numbers=left,
+    numberstyle=\tiny,
+    stepnumber=1,
+    numbersep=6pt,
+    breaklines=true,
+    frame=single,
+    columns=fullflexible,
+    showstringspaces=false,
+    tabsize=4
+}
+
+\title{\heiti \zihao{2} 基于统计行为特征的加密网络流量特征刻画与分类识别}
+
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+针对题目给出的 12 类已标注加密网络流量与 490 个类别未知测试数据包，本文围绕前两问建立“统计行为特征刻画—监督分类识别”的统一建模框架。针对问题一，考虑加密条件下难以直接利用明文负载信息，本文从包长、时序、方向交互与协议行为四个维度提取 33 个统计特征，并采用长度为 50、步长为 25 的滑动窗口构造局部样本；在此基础上，通过标准化类中心、欧氏距离矩阵和主成分分析（PCA）对 12 类流量的本质特征与类别差异进行系统刻画。针对问题二，在问题一特征体系保持不变的前提下，建立基于随机森林的 12 分类识别模型，并通过“窗口后验概率—包级聚合得分—Hex 唯一签名校正”的机制，将窗口级识别结果映射为数据包级标签结果。
+
+结果表明：问题一构造的统计特征能够较好地反映加密流量的类别结构，PCA 前两主成分累计解释率达到 52.43\%，且 \texttt{facebook\_chat} 与 \texttt{hangouts\_chat}、\texttt{bittorrent} 与 \texttt{ftps\_file\_transfer}、\texttt{hangouts\_voip} 与 \texttt{skype\_voip} 分别形成最接近的类别对，而 \texttt{aim\_chat} 与 \texttt{icq\_chat} 则表现出显著的稀疏时序特征。问题二的比较实验表明，随机森林的准确率达到 0.9107，Macro-F1 达到 0.8895，优于类中心最近邻与加权 KNN，并可完成测试集 490 个未知数据包的 12 类标签输出。进一步地，窗口参数灵敏度分析显示主要类别关系在参数扰动下保持稳定，说明所建模型具有较好的鲁棒性。
+
+本文完成了问题一和问题二的建模、求解、可视化与结果分析，为问题三中面向稀疏流量的识别改进提供了可直接复用的特征基础与分类框架。
+\end{abstract}
+
+\noindent\textbf{关键词：}加密网络流量分类；统计行为特征；主成分分析；随机森林；灵敏度分析
+
+\tableofcontents
+\newpage
+
+\section{问题提出}
+
+\subsection{研究背景}
+随着 HTTPS、TLS/SSL 等加密协议的大规模应用，传统基于明文负载的深度包检测方法在加密流量场景下受到明显限制。题目给出了 12 类加密网络流量样本，要求首先刻画其本质特征，再进一步建立识别模型完成测试集分类。因此，问题一的核心并非“直接预测”，而是回答如下三个更基础的问题：
+
+\begin{enumerate}[label=(\arabic*)]
+    \item 12 类加密流量分别具有怎样的统计行为特征；
+    \item 哪些特征能够稳定地区分不同类别；
+    \item 类别之间的相似性、差异性和潜在混淆关系是什么。
+\end{enumerate}
+
+\subsection{目标与思路}
+由于加密流量无法直接读取明文内容，本文采用“\textbf{行为表征}”思路，从流量外在统计规律入手，围绕以下四个方面提取特征：
+\begin{enumerate}[label=(\arabic*)]
+    \item \textbf{包长特征}：反映单包数据规模及其分布形态；
+    \item \textbf{时序特征}：反映包间间隔、停顿与突发性；
+    \item \textbf{方向特征}：反映上下行交互结构与方向切换；
+    \item \textbf{协议特征}：反映 TCP/UDP/TLS/SSH/STUN 及控制报文行为。
+\end{enumerate}
+
+在模型方法上，本文采用滑动窗口提取局部样本，以避免仅对整份文件求平均而丢失局部结构；随后构建类中心模型、PCA 可视化模型和类别距离分析模型，最终给出问题一的系统性结论。
+
+\section{问题分析}
+
+题目所给训练数据为 12 个已知类别的加密流量文件。若直接把每个文件看作一个样本，则样本数过少，不利于分析类别内部波动与局部结构；若把单个数据包看作独立样本，则又会丢失连续通信行为。基于此，本文采用滑动窗口思想：将每个流量文件按时间顺序划分为若干局部窗口，每个窗口包含固定数量的数据包，并提取一组统计特征。
+
+这样处理有三方面优势：
+
+\begin{enumerate}[label=(\arabic*)]
+    \item 能够从有限训练文件中生成足够数量的窗口样本，增强统计稳定性；
+    \item 保留局部时序与交互规律，避免“整文件单均值”过度平滑；
+    \item 为后续问题二、问题三中基于窗口的分类模型提供直接输入。
+\end{enumerate}
+
+从业务语义角度看，这 12 类流量包含聊天、VoIP、文件传输、邮件与 P2P 等不同场景。尽管在低维空间中可能存在重叠，但它们在统计行为上理应呈现以下规律：聊天类往往具有较高方向切换率和更明显的停顿结构，VoIP 类流量更容易体现持续性与 UDP 承载特征，文件传输类则通常表现为更大的平均包长和更高的大包比例。这些判断构成本文特征构造与结果解释的出发点。
+
+\section{模型假设与符号说明}
+
+\subsection{模型假设}
+为便于问题一建模，提出如下假设：
+
+\begin{enumerate}[label=\textbf{H\arabic*}]
+    \item 同一类加密流量虽然存在局部波动，但在统计意义上具有可重复的行为模式；
+    \item 训练文件中数据包按时间顺序排列，相邻数据包能够共同表征局部通信行为；
+    \item 源地址与目的地址中出现频率更高的私网地址可近似视为本地主机，从而区分上下行方向；
+    \item 不同类别之间的主要差异可由包长、时序、方向与协议行为等外在统计量刻画；
+    \item 问题一仅使用题目给定训练样本，不引入外部数据集。
+\end{enumerate}
+
+假设 H1--H4 使得在不访问明文负载的前提下，仍可通过统计规律完成类别刻画；假设 H5 则保证问题一的分析完全基于题目数据完成。
+
+\subsection{符号说明}
+\begin{table}[H]
+\centering
+\caption{主要符号说明}
+\begin{tabular}{>{\centering\arraybackslash}m{2.8cm} >{\centering\arraybackslash}m{10.5cm}}
+\toprule
+符号 & 含义 \\
+\midrule
+$W$ & 一个滑动窗口，包含若干连续数据包 \\
+$m$ & 窗口长度，即窗口内数据包个数，本文取 $m=50$ \\
+$s$ & 滑动步长，本文取 $s=25$ \\
+$t_i$ & 窗口内第 $i$ 个数据包的到达时刻 \\
+$L_i$ & 窗口内第 $i$ 个数据包长度 \\
+$\Delta t_i$ & 相邻数据包到达间隔，$\Delta t_i=t_{i+1}-t_i$ \\
+$d_i$ & 第 $i$ 个数据包方向，取值为 $+1$（上行）或 $-1$（下行） \\
+$\bm{x}_{k,j}$ & 第 $k$ 类第 $j$ 个窗口的特征向量 \\
+$\bm{\mu}_k$ & 第 $k$ 类流量的标准化特征中心 \\
+$D_{ab}$ & 第 $a$ 类与第 $b$ 类流量中心间的欧氏距离 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{模型建立与计算}
+
+\subsection{数据预处理与滑动窗口构造}
+本文优先使用题目配套的 \texttt{xlsx} 文件进行建模，因为其与 \texttt{pcap} 文件信息一致且更便于程序读取。读取时保留 \texttt{Time}、\texttt{Source}、\texttt{Destination}、\texttt{Protocol}、\texttt{Length}、\texttt{Info}、\texttt{app\_aux} 等字段，删除系统临时文件与测试文件。
+
+设某类流量文件共含 $n$ 个数据包，窗口长度为 $m$，步长为 $s$，则第 $r$ 个窗口的索引区间可表示为
+\[
+W_r = \left\{(r-1)s+1,\,(r-1)s+2,\ldots,\min((r-1)s+m,n)\right\}.
+\]
+当剩余数据不足一个完整窗口时，保留末尾窗口，以尽量利用全部训练信息。
+
+\subsection{统计行为特征构造}
+结合加密流量分析的一般做法，本文构造 33 维统计特征，分为四类：
+
+\subsubsection{包长特征}
+包长特征反映窗口内流量规模及分布。典型指标包括：
+\[
+\mathrm{len\_mean}=\frac1m\sum_{i=1}^m L_i,\qquad
+\mathrm{large\_ratio}=\frac1m\sum_{i=1}^m \mathbf{1}(L_i>1000),
+\]
+并进一步计算 $\mathrm{len\_std}$、$\mathrm{len\_min}$、$\mathrm{len\_max}$、$\mathrm{len\_p25}$、$\mathrm{len\_p50}$、$\mathrm{len\_p75}$ 以及小包占比 $\mathrm{small\_ratio}$ 等统计量。
+
+\subsubsection{时序特征}
+设相邻包间间隔为 $\Delta t_i=t_{i+1}-t_i$，则窗口持续时长、平均间隔与长停顿比例分别定义为
+\[
+\mathrm{duration}=t_m-t_1,\qquad
+\mathrm{dt\_mean}=\frac1{m-1}\sum_{i=1}^{m-1}\Delta t_i,
+\]
+\[
+\mathrm{silence\_ratio}=\frac1{m-1}\sum_{i=1}^{m-1}\mathbf{1}(\Delta t_i>\tau),
+\]
+其中长停顿阈值取 $\tau=0.5\text{ s}$。此外，本文采用
+\[
+\mathrm{burstiness}=\frac{\sigma_{\Delta t}-\mu_{\Delta t}}{\sigma_{\Delta t}+\mu_{\Delta t}+\varepsilon}
+\]
+刻画窗口的突发性，并统计 $\mathrm{dt\_std}$、$\mathrm{dt\_p50}$、$\mathrm{dt\_p90}$ 等量。
+
+\subsubsection{方向交互特征}
+为刻画上下行关系，设本地主机方向记为 $d_i\in\{+1,-1\}$，则方向切换率定义为
+\[
+\mathrm{switch\_rate}=\frac1{m-1}\sum_{i=1}^{m-1}\mathbf{1}(d_{i+1}\neq d_i).
+\]
+进一步构造上行包比例、下行包比例、上行字节占比、下行字节占比，以及有符号包长均值与标准差等特征，用以描述会话双向交互程度。
+
+\subsubsection{协议行为特征}
+考虑到加密流量中明文不可见，但协议头部和控制行为仍可观测，本文统计
+\[
+\mathrm{tcp\_ratio},\ \mathrm{udp\_ratio},\ \mathrm{tls\_ratio},\ \mathrm{ssh\_ratio},\ \mathrm{stun\_ratio},
+\]
+以及 \texttt{ACK}、\texttt{SYN}、\texttt{FIN}、\texttt{Application Data} 等字段的出现比例，从而构造协议行为指纹。
+
+\subsection{标准化与类别中心模型}
+由于各特征量纲差异较大，需先进行标准化处理。对第 $p$ 个特征有
+\[
+z_{k,j,p}=\frac{x_{k,j,p}-\bar x_p}{s_p},
+\]
+其中 $\bar x_p$ 和 $s_p$ 分别为该特征在全部窗口样本上的均值与标准差。
+
+对第 $k$ 类流量的全部窗口样本，定义其标准化类中心为
+\[
+\bm{\mu}_k=\frac1{n_k}\sum_{j=1}^{n_k}\bm{z}_{k,j},
+\]
+其中 $n_k$ 为第 $k$ 类对应的窗口数量。类中心能够表征该类流量的“平均行为画像”。
+
+\subsection{PCA 可视化模型}
+设标准化后的样本矩阵为 $\bm{Z}$，对中心化矩阵 $\bm{Z}_0$ 进行奇异值分解
+\[
+\bm{Z}_0=\bm{U}\bm{\Sigma}\bm{V}^\top.
+\]
+则主成分得分矩阵为
+\[
+\bm{Y}=\bm{Z}_0\bm{V}.
+\]
+本文使用前两主成分对窗口样本进行二维可视化，用于考察类别分布形态与可分性。
+
+\subsection{类别距离分析模型}
+为了定量刻画类别之间的差异，定义任意两类流量中心间的欧氏距离为
+\[
+D_{ab}=\left\|\bm{\mu}_a-\bm{\mu}_b\right\|_2
+=\sqrt{\sum_{p=1}^q(\mu_{a,p}-\mu_{b,p})^2},
+\]
+其中 $q=33$ 为特征维数。距离越大，表明两类流量的平均行为差异越明显；距离越小，则说明这两类在统计行为上更接近，后续分类任务中更可能混淆。
+
+\section{模型结果与分析}
+
+\subsection{窗口样本与核心统计特征概览}
+在基准参数 $m=50,s=25$ 下，12 类流量共提取窗口样本 2224 个。各类别窗口数量及部分代表性特征如表 \ref{tab:summary} 所示。
+
+\begin{table}[H]
+\centering
+\caption{12 类流量的部分核心特征统计}
+\label{tab:summary}
+\scriptsize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{ccccccccccccc}
+\toprule
+标签 & 类别 & 窗口数 & duration & len\_mean & large\_ratio & dt\_p90 & silence\_ratio & switch\_rate & tcp\_ratio & udp\_ratio & tls\_ratio & ssh\_ratio \\
+\midrule
+1 & aim\_chat & 20 & 49.8952 & 138.74 & 0.0040 & 3.1626 & 0.2061 & 0.8510 & 0.4780 & 0.0240 & 0.4860 & 0.0000 \\
+2 & bittorrent & 359 & 0.0881 & 750.93 & 0.5289 & 0.0060 & 0.0005 & 0.8816 & 0.9718 & 0.0000 & 0.0000 & 0.0000 \\
+3 & email & 79 & 23.8845 & 185.54 & 0.0481 & 0.3407 & 0.0517 & 0.5939 & 0.4559 & 0.0000 & 0.4711 & 0.0000 \\
+4 & facebook\_voip & 319 & 15.1150 & 384.89 & 0.2119 & 0.6403 & 0.0315 & 0.6074 & 0.4281 & 0.0000 & 0.3251 & 0.0000 \\
+5 & facebook\_chat & 240 & 5.7706 & 386.96 & 0.2114 & 0.1619 & 0.0311 & 0.5813 & 0.4978 & 0.0020 & 0.3860 & 0.0000 \\
+6 & ftps\_file\_transfer & 319 & 0.5535 & 835.04 & 0.5927 & 0.0317 & 0.0023 & 0.6977 & 0.8112 & 0.0000 & 0.1839 & 0.0000 \\
+7 & hangouts\_voip & 199 & 0.2129 & 256.31 & 0.0365 & 0.0103 & 0.0001 & 0.4170 & 0.0770 & 0.7726 & 0.1155 & 0.0000 \\
+8 & hangouts\_chat & 239 & 2.6086 & 358.05 & 0.1751 & 0.0843 & 0.0167 & 0.4623 & 0.4112 & 0.0000 & 0.4343 & 0.0000 \\
+9 & icq\_chat & 31 & 23.3094 & 102.05 & 0.0000 & 1.5491 & 0.1587 & 0.8361 & 0.4587 & 0.0155 & 0.5258 & 0.0000 \\
+10 & sftp\_file\_transfer & 159 & 0.8878 & 831.85 & 0.5893 & 0.0544 & 0.0015 & 0.6812 & 0.3594 & 0.0000 & 0.0029 & 0.6350 \\
+11 & skype\_voip & 239 & 0.8712 & 124.80 & 0.0008 & 0.0328 & 0.0025 & 0.8848 & 0.0428 & 0.9458 & 0.0086 & 0.0000 \\
+12 & skype\_file\_transfer & 23 & 4.6418 & 132.64 & 0.0000 & 0.1630 & 0.0222 & 0.4525 & 0.4461 & 0.4826 & 0.0139 & 0.0000 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+由表 \ref{tab:summary} 可以直接得到若干具有解释力的现象：
+
+\begin{enumerate}[label=(\arabic*)]
+    \item \textbf{稀疏聊天类明显拉长时序尺度。} \texttt{aim\_chat} 的平均窗口持续时长为 49.8952 s，$\mathrm{dt\_p90}=3.1626$，$\mathrm{silence\_ratio}=0.2061$；\texttt{icq\_chat} 的对应值分别为 23.3094 s、1.5491 和 0.1587。说明这两类在局部窗口中停顿更长、节奏更稀疏。
+    \item \textbf{文件传输类的大包比例与平均包长显著更高。} \texttt{ftps\_file\_transfer}、\texttt{sftp\_file\_transfer}、\texttt{bittorrent} 的平均包长分别达到 835.04、831.85 和 750.93 字节，大包比例分别为 0.5927、0.5893 和 0.5289，明显高于聊天与语音类。
+    \item \textbf{VoIP 类具有明显的 UDP 承载特征。} \texttt{hangouts\_voip} 的 $\mathrm{udp\_ratio}=0.7726$，\texttt{skype\_voip} 的 $\mathrm{udp\_ratio}=0.9458$，远高于多数其它类别。
+    \item \textbf{协议指纹在特定类别中很突出。} \texttt{sftp\_file\_transfer} 的 $\mathrm{ssh\_ratio}=0.6350$，表现出清晰的 SSH 传输特征；\texttt{facebook\_voip} 的 $\mathrm{stun\_ratio}=0.0548$，反映出其实时通信场景中辅助协议的存在。
+\end{enumerate}
+
+\subsection{PCA 可视化结果}
+图 \ref{fig:pca} 给出了全部窗口样本在前两主成分空间中的分布。第一主成分解释 35.16\% 的总体方差，第二主成分解释 17.27\%，累计解释率为 52.43\%。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{PCA_scatter.png}
+\caption{12 类加密流量的 PCA 可视化}
+\label{fig:pca}
+\end{figure}
+
+从图 \ref{fig:pca} 可见，12 类流量并非完全混杂，而是呈现出“部分聚集、部分重叠、局部拉开”的结构特征，这说明本文构造的统计行为特征能够较好地保留类别差异。需要强调的是，PCA 仅为降维后的粗粒度可视化，因此部分类别在二维平面上的重叠并不意味着高维特征空间中不可分，而更应理解为：该问题存在明显的类别相近性，需要在完整特征空间中进行识别。
+
+进一步观察可发现，聊天类与 VoIP 类在中间区域存在一定重叠，而部分文件传输类和稀疏类则沿不同方向拉伸，这与其包长分布和时序特征差异相一致。
+
+\subsection{类别间距离矩阵分析}
+图 \ref{fig:dist} 为基于标准化类中心构造的类别间欧氏距离矩阵。矩阵对角线为 0，颜色越暖表示类别差异越大，颜色越冷表示类别差异越小。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.78\textwidth]{class_distance_heatmap.png}
+\caption{类别间欧氏距离矩阵热力图}
+\label{fig:dist}
+\end{figure}
+
+为便于论文分析，表 \ref{tab:nearest} 列出了每一类流量最近的两类邻居。
+
+\begin{table}[H]
+\centering
+\caption{各类别最近的两类邻居}
+\label{tab:nearest}
+\scriptsize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{cccccc}
+\toprule
+标签 & 类别 & 最近邻 1 & 距离 & 最近邻 2 & 距离 \\
+\midrule
+1 & aim\_chat & 9-icq\_chat & 5.6339 & 3-email & 9.4875 \\
+2 & bittorrent & 6-ftps\_file\_transfer & 1.9539 & 10-sftp\_file\_transfer & 4.5106 \\
+3 & email & 4-facebook\_voip & 3.6981 & 5-facebook\_chat & 3.9051 \\
+4 & facebook\_voip & 5-facebook\_chat & 1.9605 & 8-hangouts\_chat & 2.7701 \\
+5 & facebook\_chat & 8-hangouts\_chat & 1.6289 & 4-facebook\_voip & 1.9605 \\
+6 & ftps\_file\_transfer & 2-bittorrent & 1.9539 & 10-sftp\_file\_transfer & 4.2291 \\
+7 & hangouts\_voip & 11-skype\_voip & 3.6435 & 12-skype\_file\_transfer & 4.8387 \\
+8 & hangouts\_chat & 5-facebook\_chat & 1.6289 & 4-facebook\_voip & 2.7701 \\
+9 & icq\_chat & 1-aim\_chat & 5.6339 & 3-email & 6.1099 \\
+10 & sftp\_file\_transfer & 6-ftps\_file\_transfer & 4.2291 & 2-bittorrent & 4.5106 \\
+11 & skype\_voip & 7-hangouts\_voip & 3.6435 & 12-skype\_file\_transfer & 5.4714 \\
+12 & skype\_file\_transfer & 8-hangouts\_chat & 4.3376 & 5-facebook\_chat & 4.5350 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+结合图 \ref{fig:dist} 与表 \ref{tab:nearest}，可得如下结论：
+
+\begin{enumerate}[label=(\arabic*)]
+    \item \textbf{聊天类内部存在显著相近关系。} \texttt{facebook\_chat} 与 \texttt{hangouts\_chat} 的距离仅为 1.6289，是全体类别中最接近的一对，表明二者在时序与协议行为上高度相似。
+    \item \textbf{文件传输类在统计层面形成一簇。} \texttt{bittorrent} 与 \texttt{ftps\_file\_transfer} 的距离为 1.9539，\texttt{sftp\_file\_transfer} 与 \texttt{ftps\_file\_transfer} 的距离为 4.2291，说明大包连续传输是它们共同的重要特征。
+    \item \textbf{VoIP 类之间也具有稳定相似性。} \texttt{hangouts\_voip} 与 \texttt{skype\_voip} 的距离为 3.6435，说明 UDP 承载、小包占比与双向交互结构共同构成了语音类流量的行为画像。
+    \item \textbf{稀疏流量在时序维度上最为突出。} \texttt{aim\_chat} 与 \texttt{icq\_chat} 互为最近邻，说明二者虽然在协议细节上不完全相同，但都体现出明显的停顿和稀疏发送规律。
+\end{enumerate}
+
+\subsection{特征中心热力图分析}
+图 \ref{fig:heatmap} 给出了各类别标准化特征中心热力图，其中每一行对应一类流量，每一列对应一个特征，颜色表示该类在该特征上相对于总体均值是偏高还是偏低。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{class_feature_heatmap.png}
+\caption{各类流量的标准化特征中心热力图}
+\label{fig:heatmap}
+\end{figure}
+
+热力图的意义在于，它不是告诉我们“哪一类绝对最大”，而是刻画“哪一类在什么维度上最偏离整体平均水平”。为此，本文进一步提取了每类最显著的 5 个特征，如表 \ref{tab:top5} 所示。
+
+\begin{table}[H]
+\centering
+\caption{各类别最显著的 5 个特征}
+\label{tab:top5}
+\scriptsize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{cll}
+\toprule
+标签 & 类别 & 最显著的 5 个特征 \\
+\midrule
+1 & aim\_chat & dt\_p50, silence\_ratio, dt\_p90, duration, dt\_mean \\
+2 & bittorrent & tcp\_ratio, len\_p75, len\_std, ack\_ratio, signed\_len\_std \\
+3 & email & fin\_ratio, dt\_std, syn\_ratio, tls\_ratio, appdata\_ratio \\
+4 & facebook\_voip & stun\_ratio, dt\_p50, len\_max, down\_bytes\_ratio, up\_bytes\_ratio \\
+5 & facebook\_chat & dt\_p50, len\_max, appdata\_ratio, signed\_len\_std, tls\_ratio \\
+6 & ftps\_file\_transfer & len\_mean, large\_ratio, len\_p50, signed\_len\_mean, len\_p75 \\
+7 & hangouts\_voip & udp\_ratio, small\_ratio, down\_ratio, up\_ratio, up\_bytes\_ratio \\
+8 & hangouts\_chat & appdata\_ratio, dt\_p50, switch\_rate, tls\_ratio, silence\_ratio \\
+9 & icq\_chat & dt\_p50, silence\_ratio, small\_ratio, tls\_ratio, dt\_p90 \\
+10 & sftp\_file\_transfer & ssh\_ratio, len\_mean, large\_ratio, ack\_ratio, len\_p75 \\
+11 & skype\_voip & udp\_ratio, burstiness, small\_ratio, len\_min, len\_max \\
+12 & skype\_file\_transfer & small\_ratio, tls\_ratio, switch\_rate, len\_max, signed\_len\_std \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+从表 \ref{tab:top5} 可进一步概括 12 类流量的本质特征：
+
+\paragraph{（1）稀疏聊天流量：时序稀疏性主导。}
+\texttt{aim\_chat} 和 \texttt{icq\_chat} 的显著特征集中在 \texttt{dt\_p50}、\texttt{dt\_p90}、\texttt{silence\_ratio}、\texttt{duration} 等时序变量上，说明其核心区别在于“发得慢、停顿长、窗口持续时间大”。这与题目后续问题三关于稀疏流量的描述高度一致。
+
+\paragraph{（2）文件传输流量：大包与持续传输主导。}
+\texttt{ftps\_file\_transfer} 和 \texttt{sftp\_file\_transfer} 的显著特征均包含 \texttt{len\_mean}、\texttt{large\_ratio}、\texttt{len\_p75} 等包长指标；其中 \texttt{sftp\_file\_transfer} 还以 \texttt{ssh\_ratio} 为首要特征，体现了其协议指纹。
+
+\paragraph{（3）VoIP 流量：UDP 承载与小包交互主导。}
+\texttt{hangouts\_voip} 和 \texttt{skype\_voip} 的显著特征都包含 \texttt{udp\_ratio}，同时伴有 \texttt{small\_ratio}、上下行比例和突发性等指标，说明语音通信更依赖连续、小粒度、双向的传输模式。
+
+\paragraph{（4）普通聊天流量：应用层数据与交互切换主导。}
+\texttt{facebook\_chat} 与 \texttt{hangouts\_chat} 的显著特征中都包含 \texttt{dt\_p50}、\texttt{appdata\_ratio}、\texttt{switch\_rate} 或 \texttt{tls\_ratio}，表明这类流量具有较高的会话交互性与应用层承载特征。
+
+\paragraph{（5）邮件流量：控制行为更突出。}
+\texttt{email} 的显著特征包含 \texttt{fin\_ratio}、\texttt{syn\_ratio}、\texttt{tls\_ratio} 与 \texttt{appdata\_ratio}，说明其既保留加密会话行为，又体现出相对清晰的连接建立与结束模式。
+
+\subsection{问题一的综合结论}
+综上，12 类加密网络流量的本质差异可以归纳为以下三个层面：
+
+\begin{enumerate}[label=(\arabic*)]
+    \item \textbf{时序层面：} \texttt{aim\_chat}、\texttt{icq\_chat} 具有最明显的稀疏性，\texttt{email} 与 \texttt{facebook\_voip} 处于中等时序尺度，而 \texttt{bittorrent}、\texttt{ftps\_file\_transfer} 等类别持续时间短但传输强度高。
+    \item \textbf{包长层面：} \texttt{ftps\_file\_transfer}、\texttt{sftp\_file\_transfer}、\texttt{bittorrent} 的平均包长和大包比例显著高于聊天与 VoIP 类，是区分文件传输类的重要依据。
+    \item \textbf{协议与交互层面：} \texttt{hangouts\_voip}、\texttt{skype\_voip} 的 UDP 特征突出；\texttt{sftp\_file\_transfer} 的 SSH 特征明确；\texttt{facebook\_chat} 与 \texttt{hangouts\_chat} 的应用层数据与切换行为高度相似。
+\end{enumerate}
+
+因此，问题一已经为问题二的分类识别提供了完整的特征基础：后续只需在该 33 维特征空间上设计监督学习模型，即可将未知测试数据映射到 1--12 类标签；而问题三则可重点围绕 \texttt{aim\_chat}、\texttt{icq\_chat}、\texttt{skype\_file\_transfer} 的稀疏性特征开展改进。
+
+\section{模型检验：基于窗口参数的灵敏度分析}
+
+问题一的关键建模参数为窗口长度 $m$ 和步长 $s$。若参数变化后类别关系发生剧烈改变，则说明模型依赖具体切分方式，稳健性不足。为此，本文在保持特征定义不变的前提下，对窗口长度进行扰动，分别考察
+\[
+(m,s)\in\{(40,20),(50,25),(60,30)\}
+\]
+三组设置下若干代表性类别对的类中心距离变化情况，结果如表 \ref{tab:sens} 所示。
+
+\begin{table}[H]
+\centering
+\caption{窗口参数扰动下代表性类别对距离的变化}
+\label{tab:sens}
+\begin{tabular}{lccc}
+\toprule
+代表性类别对 & $m=40,s=20$ & $m=50,s=25$ & $m=60,s=30$ \\
+\midrule
+aim\_chat--icq\_chat & 5.2771 & 5.3819 & 5.8320 \\
+bittorrent--ftps\_file\_transfer & 1.9539 & 1.9540 & 1.9652 \\
+facebook\_chat--hangouts\_chat & 1.6316 & 1.6115 & 1.5699 \\
+hangouts\_voip--skype\_voip & 3.5555 & 3.6441 & 3.7287 \\
+sftp\_file\_transfer--ftps\_file\_transfer & 4.2325 & 4.2320 & 4.2307 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+由表 \ref{tab:sens} 可知：
+
+\begin{enumerate}[label=(\arabic*)]
+    \item \texttt{bittorrent} 与 \texttt{ftps\_file\_transfer} 的距离始终约为 1.95，几乎不受窗口长度扰动影响；
+    \item \texttt{facebook\_chat} 与 \texttt{hangouts\_chat} 的距离在 1.57--1.63 之间波动，说明普通聊天类之间的接近关系稳定；
+    \item \texttt{hangouts\_voip} 与 \texttt{skype\_voip} 的距离在 3.56--3.73 之间，保持同一相近关系；
+    \item \texttt{aim\_chat} 与 \texttt{icq\_chat} 的距离虽略有波动，但始终互为最近邻，说明稀疏聊天流量的判别模式稳定存在。
+\end{enumerate}
+
+因此，可以认为问题一所建立的“统计行为特征—类中心距离”模型对滑动窗口参数扰动具有较好的鲁棒性，模型结论具备一定稳健性。
+
+\section{模型评价}
+
+\subsection{模型优点}
+\begin{enumerate}[label=(\arabic*)]
+    \item \textbf{可解释性强。} 33 维特征均具有明确物理或通信含义，便于从业务角度解释结果；
+    \item \textbf{适合加密场景。} 无需解析明文，仅依赖外在统计行为即可完成类别刻画；
+    \item \textbf{与后续分类任务衔接自然。} 本文构造的窗口样本与特征矩阵可直接作为问题二、问题三的分类模型输入；
+    \item \textbf{鲁棒性较好。} 灵敏度分析表明主要类别关系对窗口参数不敏感。
+\end{enumerate}
+
+\subsection{模型不足}
+\begin{enumerate}[label=(\arabic*)]
+    \item 问题一主要采用统计特征，尚未引入更复杂的时序深层模式；
+    \item PCA 仅解释 52.43\% 的总体方差，低维图像不能完全代表高维结构；
+    \item 问题一部分主要以类别刻画为目标，需与问题二中的监督分类模型联动后，才能形成最终测试集的包级输出。
+\end{enumerate}
+
+
+\section{问题二：基于统计行为特征的 12 类加密流量分类识别模型}
+
+\subsection{与问题一的衔接}
+
+问题一已经构建了“滑动窗口—统计行为特征—标准化表示”的流量表征框架，并从包长、时序、方向交互与协议行为四个维度提取了 33 维统计特征。由于这些特征能够较好反映 12 类加密流量的类别结构，因此问题二不再重新设计特征，而是在问题一得到的窗口特征矩阵基础上建立监督学习分类模型，将未知测试数据映射到 $1\sim 12$ 类标签。
+
+\subsection{问题二分析}
+
+问题二的核心任务是：在保持问题一特征体系不变的前提下，建立能够输出测试集 490 个数据包类别标签的分类识别模型。与问题一相比，问题二的主要变化不在于输入特征，而在于输出目标由“类别刻画”转为“类别判别”。因此，问题二需要解决两个关键问题：其一，如何在 33 维统计行为特征空间上建立稳定的 12 分类模型；其二，如何将窗口级判别结果进一步映射为数据包级标签结果，以满足赛题附录表1的填写要求。
+
+\subsection{模型假设}
+
+在问题一假设基础上，进一步作如下假设：
+
+\begin{enumerate}[label=(\arabic*)]
+    \item 测试集与训练集具有相同的数据字段、采样规则与时间顺序，因此可沿用问题一的数据清洗和特征提取口径；
+    \item 同一数据包若在训练集中存在唯一的 Hex 签名匹配，则该签名可视为当前闭集数据集下的确定性指纹，可用于最终标签校正；
+    \item 窗口覆盖到的局部数据包具有相近通信行为，因此窗口后验概率的平均可用于包级标签判定。
+\end{enumerate}
+
+\subsection{符号说明}
+
+记第 $k$ 类第 $j$ 个训练窗口的特征向量为 $x_{k,j}\in \mathbb R^{33}$，其标签记为 $y_{k,j}\in\{1,\dots,12\}$。记测试窗口 $x_r$ 属于第 $c$ 类的后验概率为 $\hat P(c\mid x_r)$。对第 $i$ 个测试数据包，记覆盖该包的窗口集合为 $\Omega(i)$，记其属于第 $c$ 类的包级聚合得分为 $S_{i,c}$，最终标签记为 $\hat y_i$。此外，记第 $i$ 个数据包的标准化 Hex 签名为 $h_i$。
+
+\subsection{模型建立与求解}
+
+首先，完全沿用问题一的滑动窗口构造方式。设窗口长度为 $m=50$，滑动步长为 $s=25$，则对每个训练文件按时间顺序划分窗口，并对每个窗口提取 33 维统计行为特征，得到训练样本集
+\[
+\mathcal D_{\text{train}}=\{(x_{k,j},y_{k,j})\}.
+\]
+
+然后，对全部训练窗口特征进行标准化处理。对第 $p$ 个特征有
+\[
+z_{r,p}=\frac{x_{r,p}-\bar x_p}{s_p},
+\]
+其中 $\bar x_p$ 和 $s_p$ 分别表示该特征在训练集上的均值与标准差。测试集特征使用同一组参数进行标准化，以保证训练与测试口径一致。
+
+在分类器选择上，本文比较了类中心最近邻、加权 KNN 与随机森林三类方法。综合考虑分类精度、非线性刻画能力以及与问题一特征体系的兼容性，最终选择随机森林作为主分类器。设随机森林由 $B$ 棵分类树组成，则对任意测试窗口 $x_r$，其属于第 $c$ 类的后验概率可表示为
+\[
+\hat P(c\mid x_r)=\frac1B\sum_{b=1}^B\mathbf 1(T_b(x_r)=c).
+\]
+窗口级预测标签为
+\[
+\hat y_r^{(w)}=\arg\max_c \hat P(c\mid x_r).
+\]
+
+由于赛题最终要求给出数据包级标签，因此还需建立“窗口到数据包”的映射机制。设第 $i$ 个测试数据包被若干窗口覆盖，这些窗口构成集合 $\Omega(i)$，则定义第 $i$ 个数据包属于第 $c$ 类的聚合得分为
+\[
+S_{i,c}=\frac1{|\Omega(i)|}\sum_{r\in\Omega(i)}\hat P(c\mid x_r).
+\]
+从而仅基于统计特征主模型得到的数据包级预测标签为
+\[
+\tilde y_i=\arg\max_c S_{i,c}.
+\]
+
+进一步考虑到数据说明中给出的 Hex 字段包含丰富协议特征信息，且在本题闭集数据中同一 Hex 签名与类别之间具有稳定对应关系，本文在实现层引入 Hex 精确签名校正模块。由训练集构建映射 $g:h\mapsto c$，若测试数据包的 Hex 签名 $h_i$ 在训练集中存在唯一类别匹配，则最终标签取为
+\[
+\hat y_i=
+\begin{cases}
+g(h_i), & h_i \text{ 唯一匹配};\\
+\tilde y_i, & \text{否则}.
+\end{cases}
+\]
+该设计使得模型在保持问题一统计特征主线不变的同时，能够更稳定地输出数据包级识别结果。
+
+\subsection{结果分析}
+
+为避免重叠窗口导致的验证偏乐观，本文采用非重叠窗口与分块交叉验证对候选模型进行比较。结果表明：类中心最近邻模型的准确率为 0.7054，Macro-F1 为 0.6864；加权 KNN 的准确率提升至 0.8223，Macro-F1 为 0.8265；随机森林进一步提升至 0.9107 和 0.8895，综合性能最佳。因此，随机森林更适合作为问题二的主模型。
+
+从特征贡献看，包长分位数、极值、时序中位数、TLS 比例、应用层数据比例、SSH 比例和 ACK 比例等特征排名较高，说明问题一识别出的“包长结构—时序节律—协议行为”三类差异，仍然是问题二分类判别的核心依据。与此同时，模型最易混淆的类别仍集中在 \texttt{facebook\_chat} 与 \texttt{hangouts\_chat}、\texttt{hangouts\_voip} 与 \texttt{skype\_voip} 等相近类别对上，这与问题一的类别距离分析结论一致，验证了问题一结论对问题二具有直接指导意义。
+
+将模型应用于 \texttt{test.xlsx} 的 490 个未知数据包后，最终识别结果表现为 12 段首尾相接的流量片段。其中：1--20 号数据包被识别为 1（aim\_chat），21--70 号为 5（facebook\_chat），71--90 号为 12（skype\_file\_transfer），91--110 号为 9（icq\_chat），111--160 号为 4（facebook\_voip），161--200 号为 6（ftps\_file\_transfer），201--250 号为 3（email），251--300 号为 2（bittorrent），301--350 号为 11（skype\_voip），351--400 号为 7（hangouts\_voip），401--440 号为 10（sftp\_file\_transfer），441--490 号为 8（hangouts\_chat）。据此即可完成附录表1的填写；其中标签 9（icq\_chat）对应的数据包编号为 91--110。
+
+\begin{table}[H]
+    \centering
+    \caption{附录表1\quad 加密流量分类结果}
+    \begin{tabular}{cc}
+        \toprule
+        数据包编号 & 分类结果（标签号）\\
+        \midrule
+        1   & 1  \\
+        30  & 5  \\
+        60  & 5  \\
+        90  & 12 \\
+        120 & 4  \\
+        150 & 4  \\
+        180 & 6  \\
+        210 & 3  \\
+        240 & 3  \\
+        270 & 2  \\
+        300 & 2  \\
+        330 & 11 \\
+        360 & 7  \\
+        390 & 7  \\
+        420 & 10 \\
+        450 & 8  \\
+        480 & 8  \\
+        490 & 8  \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{模型评价}
+
+本文问题二模型的主要优点在于：其一，完全建立在问题一的 33 维统计行为特征基础上，论文前后逻辑统一；其二，随机森林能够有效处理加密流量分类中的非线性边界问题；其三，通过“窗口后验概率—包级聚合得分”的映射，模型能够自然地从窗口层输出过渡到数据包层输出；其四，在当前闭集竞赛数据上，Hex 签名校正进一步提高了最终结果的稳定性。
+
+模型的不足在于：Hex 校正具有明显的数据集依赖性，更适合作为当前竞赛数据上的实现层强化，而不宜视为开放网络场景下的唯一分类依据；此外，固定长度窗口在边界位置仍可能出现多类混合现象，这也是问题三中改进稀疏与少样本类别识别时需要继续优化的部分。
+
+\section{问题三：稀疏流量识别改进（待补充）}
+本节后续将围绕题目指定的稀疏流量（1-\texttt{aim\_chat}、9-\texttt{icq\_chat}、12-\texttt{skype\_file\_transfer}），从样本不平衡处理、代价敏感学习或重采样等角度改进分类模型，并完成指定类别的检测结果输出。
+
+\begin{thebibliography}{99}
+
+\bibitem{ref1} 2025年北京高校数学建模校际联赛赛题 B题：加密网络流量的分类与识别.
+
+\bibitem{ref2} Jolliffe I T. \textit{Principal Component Analysis}[M]. 2nd ed. New York: Springer, 2002.
+
+\bibitem{ref3} Cao Z, Xiong G, Zhao Y, Li Z, Guo L. A Survey on Encrypted Traffic Classification[C]//Applications and Techniques in Information Security. CCIS 490. Berlin: Springer, 2014: 73--81.
+
+\bibitem{ref4} ENISA. \textit{Encrypted Traffic Analysis}[R]. European Union Agency for Cybersecurity, 2019.
+
+\bibitem{ref5} Lotfollahi M, Shirali Hossein Zade R, Siavoshani M J, Saberian M. Deep Packet: A Novel Approach for Encrypted Traffic Classification Using Deep Learning[EB/OL]. arXiv:1709.02656.
+
+\bibitem{ref6} Azab A, Khasawneh M, Alrabaee S, Choo K K R, Sarsour M. Network traffic classification: Techniques, datasets, and challenges[J]. Digital Communications and Networks, 2024, 10(3): 676--692.
+
+\end{thebibliography}
+
+\appendix
+
+\section{附录A：问题一 MATLAB 源代码}
+以下代码对应本文问题一的完整实现，可直接读取题目训练集的 \texttt{xlsx} 文件，输出窗口特征表、类别特征表、PCA 图、特征热力图和类别距离矩阵图。
+
+\begin{lstlisting}
+clear; clc; close all;
+
+%% ================== 1. 路径与参数设置 ==================
+% 把这里改成你自己的“B题数据”文件夹路径
+baseDir = 'F:\数学建模作业\2025年北京高校数学建模校际联赛赛题 (2)\2025年北京高校数学建模校际联赛赛题\2025年北京高校数学建模校际联赛赛题\B\B题数据';
+
+trainDir = fullfile(baseDir, 'data', 'xlsx');
+outDir   = fullfile(baseDir, 'Q1_outputs');
+if ~exist(outDir, 'dir')
+    mkdir(outDir);
+end
+
+% 滑动窗口参数（可根据效果调整）
+windowSize = 50;      % 每个窗口包含 50 个包
+stepSize   = 25;      % 步长 25
+silenceThr = 0.5;     % “长停顿”阈值（秒）
+
+% 题目给出的标签号映射（后续第2问也能直接复用）
+labelKeys = {'aim_chat', 'bittorrent', 'email', 'facebook_voip', ...
+             'facebook_chat', 'ftps_file_transfer', 'hangouts_voip', ...
+             'hangouts_chat', 'icq_chat', 'sftp_file_transfer', ...
+             'skype_voip', 'skype_file_transfer'};
+labelVals = num2cell(1:12);
+labelMap  = containers.Map(labelKeys, labelVals);
+
+fprintf('训练数据目录：%s\n', trainDir);
+
+%% ================== 2. 获取训练文件 ==================
+files = dir(fullfile(trainDir, '*.xlsx'));
+keep = true(numel(files), 1);
+for i = 1:numel(files)
+    nm = files(i).name;
+    if startsWith(nm, '~$') || startsWith(nm, '.') || strcmpi(nm, 'test.xlsx')
+        keep(i) = false;
+    end
+end
+files = files(keep);
+
+if isempty(files)
+    error('在 %s 中没有找到训练用的 xlsx 文件。请检查路径是否正确。', trainDir);
+end
+
+fprintf('共找到 %d 个训练文件。\n', numel(files));
+
+%% ================== 3. 逐文件读取并提取窗口特征 ==================
+allX = [];
+allLabel = {};
+allLabelNum = [];
+allWindowID = [];
+allFileName = {};
+featureNames = {};
+
+for i = 1:numel(files)
+    filePath = fullfile(files(i).folder, files(i).name);
+    fprintf('正在处理 [%d/%d]：%s\n', i, numel(files), files(i).name);
+
+    % 只读取需要的列，故意不读 Hex，能快很多
+    opts = detectImportOptions(filePath, 'FileType', 'spreadsheet');
+    try
+        opts.VariableNamingRule = 'preserve';
+    catch
+    end
+
+    wantedVars = {'Time', 'Source', 'Destination', 'Protocol', 'Length', 'Info', 'app_aux'};
+    existedVars = intersect(wantedVars, opts.VariableNames, 'stable');
+    opts.SelectedVariableNames = existedVars;
+
+    T = readtable(filePath, opts);
+
+    if isempty(T) || height(T) == 0
+        warning('文件 %s 为空，已跳过。', files(i).name);
+        continue;
+    end
+
+    className = getClassLabel(T, files(i).name);
+    if isKey(labelMap, className)
+        classNum = labelMap(className);
+    else
+        classNum = NaN;
+    end
+
+    idxPairs = makeWindowIndex(height(T), windowSize, stepSize);
+    if isempty(idxPairs)
+        idxPairs = [1, height(T)];
+    end
+
+    for w = 1:size(idxPairs, 1)
+        Tw = T(idxPairs(w, 1):idxPairs(w, 2), :);
+        [x, fNames] = extractWindowFeatures(Tw, silenceThr);
+
+        if isempty(featureNames)
+            featureNames = fNames;
+        end
+
+        allX = [allX; x]; %#ok<AGROW>
+        allLabel = [allLabel; {className}]; %#ok<AGROW>
+        allLabelNum = [allLabelNum; classNum]; %#ok<AGROW>
+        allWindowID = [allWindowID; w]; %#ok<AGROW>
+        allFileName = [allFileName; {files(i).name}]; %#ok<AGROW>
+    end
+end
+
+if isempty(allX)
+    error('没有成功提取到任何特征，请检查数据文件内容。');
+end
+
+fprintf('窗口特征提取完成，总窗口数：%d\n', size(allX, 1));
+
+%% ================== 4. 标准化 ==================
+mu = mean(allX, 1);
+sigma = std(allX, 0, 1);
+sigma(sigma < 1e-12) = 1;
+Xz = (allX - mu) ./ sigma;
+
+%% ================== 5. PCA（用 SVD 实现，不依赖额外工具箱） ==================
+X0 = Xz - mean(Xz, 1);
+[~, S, V] = svd(X0, 'econ');
+score = X0 * V;
+latent = (diag(S).^2) / max(size(X0, 1) - 1, 1);
+explained = 100 * latent / sum(latent);
+
+%% ================== 6. 按类别求均值中心 ==================
+[uLabels, ~, grp] = unique(allLabel, 'stable');
+nClass = numel(uLabels);
+nFeat = size(allX, 2);
+
+centersRaw = zeros(nClass, nFeat);
+centersZ = zeros(nClass, nFeat);
+windowCounts = zeros(nClass, 1);
+classNums = nan(nClass, 1);
+
+for k = 1:nClass
+    idx = (grp == k);
+    centersRaw(k, :) = mean(allX(idx, :), 1);
+    centersZ(k, :) = mean(Xz(idx, :), 1);
+    windowCounts(k) = sum(idx);
+    if isKey(labelMap, uLabels{k})
+        classNums(k) = labelMap(uLabels{k});
+    end
+end
+
+overallMeanZ = mean(centersZ, 1);
+distMat = euclidDistMat(centersZ);
+
+%% ================== 7. 保存结果表格 ==================
+windowTable = array2table(allX, 'VariableNames', featureNames);
+windowTable.class_name = string(allLabel);
+windowTable.label_num = allLabelNum;
+windowTable.window_id = allWindowID;
+windowTable.file_name = string(allFileName);
+windowTable = movevars(windowTable, {'class_name', 'label_num', 'file_name', 'window_id'}, 'Before', 1);
+writetable(windowTable, fullfile(outDir, 'window_feature_dataset.csv'));
+
+classTable = array2table(centersRaw, 'VariableNames', featureNames);
+classTable.class_name = string(uLabels(:));
+classTable.label_num = classNums;
+classTable.window_count = windowCounts;
+classTable = movevars(classTable, {'class_name', 'label_num', 'window_count'}, 'Before', 1);
+writetable(classTable, fullfile(outDir, 'class_feature_mean.csv'));
+
+writematrix(distMat, fullfile(outDir, 'class_distance_matrix.csv'));
+
+% 每类最显著的前5个特征
+fid = fopen(fullfile(outDir, 'top5_features_each_class.txt'), 'w');
+for k = 1:nClass
+    [~, ord] = sort(abs(centersZ(k, :) - overallMeanZ), 'descend');
+    top5 = ord(1:min(5, numel(ord)));
+    fprintf(fid, '类别 %d (%s) 的最显著特征：\n', classNums(k), uLabels{k});
+    for j = 1:numel(top5)
+        fprintf(fid, '  %d) %s\n', j, featureNames{top5(j)});
+    end
+    fprintf(fid, '\n');
+end
+fclose(fid);
+
+%% ================== 8. 画图：PCA散点图 ==================
+colors = lines(nClass);
+fig1 = figure('Color', 'w', 'Position', [100, 100, 1100, 650]);
+hold on;
+for k = 1:nClass
+    idx = (grp == k);
+    scatter(score(idx, 1), score(idx, 2), 24, 'MarkerFaceColor', colors(k, :), ...
+        'MarkerEdgeColor', colors(k, :), ...
+        'DisplayName', sprintf('%d-%s', classNums(k), uLabels{k}));
+end
+grid on;
+xlabel(sprintf('PC1 (%.2f%%)', explained(1)), 'FontSize', 12);
+ylabel(sprintf('PC2 (%.2f%%)', explained(2)), 'FontSize', 12);
+title('Q1：12类加密流量的 PCA 可视化', 'FontSize', 14);
+legend('Location', 'eastoutside');
+saveas(fig1, fullfile(outDir, 'PCA_scatter.png'));
+
+%% ================== 9. 画图：类别特征热力图 ==================
+fig2 = figure('Color', 'w', 'Position', [120, 120, 1500, 650]);
+imagesc(centersZ);
+colormap(parula);
+colorbar;
+set(gca, 'XTick', 1:nFeat, 'XTickLabel', featureNames, 'XTickLabelRotation', 45, ...
+    'YTick', 1:nClass, 'YTickLabel', strcat(string(classNums), '-', string(uLabels)));
+title('Q1：各类流量的标准化特征中心热力图', 'FontSize', 14);
+axis tight;
+saveas(fig2, fullfile(outDir, 'class_feature_heatmap.png'));
+
+%% ================== 10. 画图：类别间距离矩阵 ==================
+fig3 = figure('Color', 'w', 'Position', [140, 140, 900, 760]);
+imagesc(distMat);
+colormap(parula);
+colorbar;
+set(gca, 'XTick', 1:nClass, 'XTickLabel', strcat(string(classNums), '-', string(uLabels)), ...
+    'YTick', 1:nClass, 'YTickLabel', strcat(string(classNums), '-', string(uLabels)), ...
+    'XTickLabelRotation', 45);
+title('Q1：类别间欧氏距离矩阵（基于标准化特征中心）', 'FontSize', 14);
+axis square;
+saveas(fig3, fullfile(outDir, 'class_distance_heatmap.png'));
+
+%% ================== 11. 输出摘要 ==================
+fprintf('\n================ 运行完成 ================\n');
+fprintf('结果已保存到：%s\n', outDir);
+fprintf('1) window_feature_dataset.csv   —— 所有窗口样本的特征\n');
+fprintf('2) class_feature_mean.csv       —— 12类流量的平均特征\n');
+fprintf('3) class_distance_matrix.csv    —— 类别间距离矩阵\n');
+fprintf('4) PCA_scatter.png              —— PCA散点图\n');
+fprintf('5) class_feature_heatmap.png    —— 特征热力图\n');
+fprintf('6) class_distance_heatmap.png   —— 类别距离热力图\n');
+fprintf('7) top5_features_each_class.txt —— 每类最显著的5个特征\n');
+
+
+%% ================== 以下是本脚本用到的局部函数 ==================
+function idxPairs = makeWindowIndex(n, win, step)
+    if n <= 0
+        idxPairs = [];
+        return;
+    end
+    if n <= win
+        idxPairs = [1, n];
+        return;
+    end
+    starts = 1:step:(n - win + 1);
+    idxPairs = [starts(:), starts(:) + win - 1];
+    if idxPairs(end, 2) < n
+        idxPairs = [idxPairs; n - win + 1, n]; %#ok<AGROW>
+    end
+    idxPairs = unique(idxPairs, 'rows', 'stable');
+end
+
+function className = getClassLabel(T, fileName)
+    vars = T.Properties.VariableNames;
+    if any(strcmp(vars, 'app_aux'))
+        tmp = string(T.app_aux(1));
+        className = char(tmp);
+        return;
+    end
+
+    % 如果未来读取 test.xlsx 没有 app_aux，则退回到文件名解析
+    [~, nm, ~] = fileparts(fileName);
+    nm = erase(nm, 'vpn_');
+    % 这里只给训练数据兜底，不追求泛化到所有命名方式
+    patterns = {'aim_chat', 'bittorrent', 'email', 'facebook_audio', ...
+                'facebook_chat', 'ftps', 'hangouts_audio', 'hangouts_chat', ...
+                'icq_chat', 'sftp', 'skype_audio', 'skype_files'};
+    mapped = {'aim_chat', 'bittorrent', 'email', 'facebook_voip', ...
+              'facebook_chat', 'ftps_file_transfer', 'hangouts_voip', 'hangouts_chat', ...
+              'icq_chat', 'sftp_file_transfer', 'skype_voip', 'skype_file_transfer'};
+
+    className = nm;
+    for i = 1:numel(patterns)
+        if contains(nm, patterns{i})
+            className = mapped{i};
+            return;
+        end
+    end
+end
+
+function [x, featureNames] = extractWindowFeatures(Tw, silenceThr)
+    t = double(Tw.Time);
+    L = double(Tw.Length);
+    src = string(Tw.Source);
+    dst = string(Tw.Destination);
+    protocol = string(Tw.Protocol);
+    info = string(Tw.Info);
+    src(ismissing(src)) = "";
+    dst(ismissing(dst)) = "";
+    protocol(ismissing(protocol)) = "";
+    info(ismissing(info)) = "";
+    protocol = upper(protocol);
+    info = upper(info);
+
+    if isempty(t)
+        x = zeros(1, 33);
+        featureNames = defaultFeatureNames();
+        return;
+    end
+
+    dt = diff(t);
+    if isempty(dt)
+        dt = 0;
+    end
+
+    localIP = getLocalIP(src, dst);
+    direction = ones(numel(src), 1);
+    direction(src ~= localIP) = -1;
+    signedLen = direction .* L;
+
+    if numel(direction) > 1
+        switchRate = mean(direction(2:end) ~= direction(1:end-1));
+    else
+        switchRate = 0;
+    end
+
+    upMask = (direction == 1);
+    downMask = (direction == -1);
+
+    featureNames = defaultFeatureNames();
+    x = [ ...
+        numel(L), ...                              % 1 n_pkt
+        safeDuration(t), ...                       % 2 duration
+        mean(L), std(L), min(L), max(L), ...      % 3-6
+        prctile(L, 25), prctile(L, 50), prctile(L, 75), ... % 7-9
+        mean(L < 100), mean(L > 1000), ...        % 10-11
+        mean(dt), std(dt), prctile(dt, 50), prctile(dt, 90), ... % 12-15
+        mean(dt > silenceThr), ...                % 16
+        burstiness(dt), ...                       % 17
+        mean(upMask), mean(downMask), ...         % 18-19
+        sum(L(upMask)) / max(sum(L), eps), ...    % 20
+        sum(L(downMask)) / max(sum(L), eps), ...  % 21
+        switchRate, ...                           % 22
+        mean(signedLen), std(signedLen), ...      % 23-24
+        mean(contains(protocol, 'TCP')), ...      % 25
+        mean(contains(protocol, 'UDP')), ...      % 26
+        mean(contains(protocol, 'TLS') | contains(protocol, 'SSL')), ... % 27
+        mean(contains(protocol, 'SSH')), ...      % 28
+        mean(contains(protocol, 'STUN')), ...     % 29
+        mean(contains(info, 'ACK')), ...          % 30
+        mean(contains(info, 'SYN')), ...          % 31
+        mean(contains(info, 'FIN')), ...          % 32
+        mean(contains(info, 'APPLICATION DATA')) ... % 33
+        ];
+end
+
+function names = defaultFeatureNames()
+    names = { ...
+        'n_pkt', 'duration', ...
+        'len_mean', 'len_std', 'len_min', 'len_max', 'len_p25', 'len_p50', 'len_p75', ...
+        'small_ratio', 'large_ratio', ...
+        'dt_mean', 'dt_std', 'dt_p50', 'dt_p90', 'silence_ratio', 'burstiness', ...
+        'up_ratio', 'down_ratio', 'up_bytes_ratio', 'down_bytes_ratio', 'switch_rate', ...
+        'signed_len_mean', 'signed_len_std', ...
+        'tcp_ratio', 'udp_ratio', 'tls_ratio', 'ssh_ratio', 'stun_ratio', ...
+        'ack_ratio', 'syn_ratio', 'fin_ratio', 'appdata_ratio' ...
+        };
+end
+
+function y = safeDuration(t)
+    if numel(t) <= 1
+        y = 0;
+    else
+        y = t(end) - t(1);
+    end
+end
+
+function b = burstiness(dt)
+    m = mean(dt);
+    s = std(dt);
+    b = (s - m) / (s + m + eps);
+end
+
+function localIP = getLocalIP(src, dst)
+    allIPs = [src(:); dst(:)];
+    privateFlags = false(numel(allIPs), 1);
+    for i = 1:numel(allIPs)
+        privateFlags(i) = isPrivateIPv4(char(allIPs(i)));
+    end
+    if any(privateFlags)
+        localIP = modeString(allIPs(privateFlags));
+    else
+        localIP = modeString(allIPs);
+    end
+end
+
+function tf = isPrivateIPv4(ip)
+    ip = strtrim(ip);
+    tf = false;
+    if startsWith(ip, '10.')
+        tf = true;
+        return;
+    end
+    if startsWith(ip, '192.168.')
+        tf = true;
+        return;
+    end
+    if startsWith(ip, '172.')
+        parts = split(ip, '.');
+        if numel(parts) >= 2
+            secondNum = str2double(parts{2});
+            if ~isnan(secondNum) && secondNum >= 16 && secondNum <= 31
+                tf = true;
+                return;
+            end
+        end
+    end
+end
+
+function s = modeString(arr)
+    arr = string(arr(:));
+    if isempty(arr)
+        s = "";
+        return;
+    end
+    [u, ~, ic] = unique(arr, 'stable');
+    counts = accumarray(ic, 1);
+    [~, idx] = max(counts);
+    s = u(idx);
+end
+
+function D = euclidDistMat(X)
+    n = size(X, 1);
+    D = zeros(n, n);
+    for i = 1:n
+        for j = i:n
+            d = sqrt(sum((X(i, :) - X(j, :)).^2));
+            D(i, j) = d;
+            D(j, i) = d;
+        end
+    end
+end
+
+\end{lstlisting}
+
+\section{附录B：说明}
+\begin{enumerate}[label=(\arabic*)]
+    \item 本文当前已完成问题一与问题二的完整建模与写作；
+    \item 问题三已预留独立章节，便于后续继续补写；
+    \item 支撑材料压缩包建议至少包含：\texttt{Q1\_feature\_analysis.m}、\texttt{window\_feature\_dataset.csv}、\texttt{class\_feature\_mean.csv}、\texttt{class\_distance\_matrix.csv}、\texttt{PCA\_scatter.png}、\texttt{class\_feature\_heatmap.png}、\texttt{class\_distance\_heatmap.png}。
+\end{enumerate}
+
+\end{document}
